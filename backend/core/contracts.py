@@ -47,6 +47,27 @@ class PlanStep(BaseModel):
             raise ValueError("depends_on cannot contain duplicate step IDs")
         return values
 
+    @field_validator("inputs")
+    @classmethod
+    def manager_inputs_cannot_select_skills(
+        cls,
+        values: dict[str, Any],
+    ) -> dict[str, Any]:
+        forbidden = {"skill_id", "selected_skills", "skill_plan"}
+
+        def contains_forbidden(value: Any) -> bool:
+            if isinstance(value, dict):
+                return bool(forbidden & set(value)) or any(
+                    contains_forbidden(item) for item in value.values()
+                )
+            if isinstance(value, list):
+                return any(contains_forbidden(item) for item in value)
+            return False
+
+        if contains_forbidden(values):
+            raise ValueError("Manager plan inputs cannot select internal Skills")
+        return values
+
 
 class ExecutionPlan(BaseModel):
     """Validated task graph generated dynamically by the Manager Agent."""

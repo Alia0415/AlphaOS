@@ -11,18 +11,20 @@ User
   → Manager Agent
   → Dynamic Expert Selection
   → Dynamic Task Graph
-  → Quant Agent (only when selected)
-      → Quant Skill Planner
-      → Allowlisted QuantSkills Runtime
-  → optional Risk / Report (only when selected)
+  → One or more selected Expert nodes
+      ├─ Research Agent
+      │   ├─ Market Research Capability, or
+      │   └─ Research Skill Planner → a_share_stock_dossier
+      ├─ Quant Agent
+      │   └─ Quant Skill Planner → Allowlisted QuantSkills Runtime
+      └─ optional Risk / Report nodes
   → Result Aggregator
   → Dynamic User-facing Result
 ```
 
 Manager chooses experts and expert dependencies only. It cannot select or
-invoke a bottom-level Skill. Quant Agent sees only its own enabled Skills and
-dynamically selects the minimal sufficient set, with at most three internal
-steps and no fixed Skill sequence.
+invoke a bottom-level Skill. Research and Quant each see only their own enabled
+Skills and select the minimal sufficient capability inside the selected expert.
 
 `WorkflowExecutor` runs exactly the validated Manager DAG. The independent
 `ResultAggregator` inspects only actual `ExpertResult` contracts, determines
@@ -35,7 +37,7 @@ The enabled expert pool is:
 
 | Expert | Enabled | Current responsibility |
 | --- | --- | --- |
-| `research` | yes | PandaData market research and deterministic metrics |
+| `research` | yes | PandaData market research plus single-company financial and fundamental analysis |
 | `quant` | yes | Factor hypotheses and pinned R020 computation |
 | `risk` | yes | Independent or dependency-based risk review |
 | `macro` | yes | PandaData-backed macro environment, policy, cycle, rate, and liquidity analysis |
@@ -45,8 +47,8 @@ The enabled expert pool is:
 Quant is never automatically added to a request. Risk and Report are never
 automatically appended to Quant. Macro is never automatically appended either;
 it is selected only when a request genuinely needs macro-environment analysis.
-The executor runs exactly the Manager-created DAG, while Quant executes its own
-validated Skill DAG internally.
+The executor runs exactly the Manager-created DAG; Research and Quant perform
+any authorized capability selection internally.
 
 ## Macro Agent
 
@@ -78,6 +80,7 @@ Test commands:
 | --- | --- | --- | --- | --- | --- |
 | `factor_idea_generation` | instruction | `quant` | `quantskills/skill-factor-idea-generation` | GPL-3.0-only | hypotheses remain `unverified` |
 | `r020_volume_expansion` | executable | `quant` | `quantskills/skill-quant-factor-volume-stat-alpha` R020 | GPL-3.0-only | `computed_not_validated` |
+| `a_share_stock_dossier` | instruction | `research` | `quantskills/skill-a-share-stock-dossier` | GPL-3.0-only | disclosed financial data calculated; future performance not validated |
 
 An installed Codex Skill is not automatically installed for the AlphaOS
 service. AlphaOS reads runtime Skills only from `QUANTSKILLS_HOME`, verifies
@@ -88,6 +91,29 @@ Instruction Skill Markdown is treated as untrusted methodology text. The
 loader enforces path containment, an explicit references allowlist, a bounded
 text size, and never executes commands found in documentation. Ark output is
 validated with Pydantic and receives at most one JSON repair attempt.
+
+Research Agent owns two distinct capability branches:
+
+```text
+Research Agent
+├─ Market Research Capability
+└─ a_share_stock_dossier
+
+Quant Agent
+├─ factor_idea_generation
+└─ r020_volume_expansion
+```
+
+`a_share_stock_dossier` answers questions about one company's financial
+statements, fundamentals, earnings quality, and disclosed risks. Quant's
+fundamental or market factor Skills answer a different question: whether a
+defined metric could become a testable stock-selection hypothesis. Financial
+performance is never presented as validated predictive return evidence.
+
+The dossier's upstream `skill-pandadata-api` dependency is mapped to AlphaOS's
+existing controlled `backend.services.pandadata_client.PandaDataClient`; no
+second credential client is installed. The lock verifies `SKILL.md`,
+`references/dossier-guide.md`, and the GPL license file at the pinned commit.
 
 R020 loads the pinned and hashed
 `factors/R020-5d-z-scored-volume-expansion/scripts/factor.py`, calls only
@@ -102,7 +128,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# Installs only the two fixed repositories and refreshes skills.lock.json.
+# Installs only the three fixed, pinned repositories and refreshes skills.lock.json.
 python scripts\install_selected_skills.py
 
 $env:ARK_API_KEY = "your-volcano-ark-key"
@@ -144,7 +170,8 @@ python scripts\install_selected_skills.py --runtime-home $env:QUANTSKILLS_HOME
 ```
 
 `skills.lock.json` is committed and records repository, commit SHA, Skill path,
-license, installation timestamp, expected entrypoint, and entrypoint SHA-256.
+license, installation timestamp, owner, mode, expected entrypoint, dependency
+mapping, and SHA-256 hashes for critical files.
 The external repositories are GPL-3.0-only; keep their copyright and license
 notices, preserve provenance in every result, and review GPL distribution
 obligations before packaging or redistributing a combined service.
@@ -158,6 +185,36 @@ curl -X POST "http://127.0.0.1:8000/api/plan" \
   -H "Content-Type: application/json" \
   -d "{\"prompt\":\"请根据 OHLCV 数据提出几个可验证的量价因子想法。\"}"
 ```
+
+### Research only: three fiscal years
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\":\"分析贵州茅台最近三年的财报，重点关注盈利质量和现金流。\"}"
+```
+
+Expected outer graph: `research`. Inside Research, the Skill Planner selects
+`a_share_stock_dossier` with `financials` scope. This scope calls only
+`get_fina_reports`, `get_fina_performance`, `get_fina_forecast`, and
+`get_audit_opinion`; it does not fetch 龙虎榜、北向资金、解禁或股权质押。
+
+`financial_risk` uses the same disclosed financial sources but emphasizes
+profit/cash-flow divergence, receivables, inventory, leverage, audit opinions,
+and forecast deterioration. `full_dossier` additionally queries the reviewed
+company, dividend, holder, pledge, unlock, and market-data methods. Missing
+fields and empty results are retained as explicit evidence, never filled in.
+
+### Research only: market performance
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\":\"分析贵州茅台过去一年的股价和波动率。\"}"
+```
+
+Expected outer graph: `research`. Research retains its existing market-data
+path and does not invoke `a_share_stock_dossier`.
 
 ### Quant only: factor ideas
 
@@ -217,7 +274,7 @@ The compatibility `final_answer` field remains available and is derived from
 
 The outer lifecycle includes `plan_created`, expert step events, optional
 legacy-named `synthesis_started` (now emitted by `ResultAggregator`), and
-`task_completed`. Quant can additionally emit:
+`task_completed`. Research and Quant Skill execution can additionally emit:
 
 - `skill_plan_created`
 - `skill_started`
@@ -228,7 +285,7 @@ Each Skill event includes the parent expert `step_id`, agent, Skill ID, and
 bounded metadata. Events never include complete `SKILL.md`, raw market data,
 or credentials.
 
-Every Quant `ExpertResult` records actual Skills, complete `SkillResult`
+Every Skill-backed `ExpertResult` records actual Skills, complete `SkillResult`
 objects, data sources, assumptions, limitations, `validation_status`, and
 source provenance. Failed and unavailable Skill results include an error.
 
@@ -244,6 +301,17 @@ The suite covers the allowlist and ownership boundary, disabled and missing
 Skills, loader traversal protection, structured unverified factor ideas,
 single repair, actual `compute_factor` dispatch, OHLCV validation, provenance,
 Quant-only and Quant-to-Risk paths, safe events, and credential redaction.
+
+For the opt-in real Research dossier smoke test:
+
+```powershell
+python tests\manual_test_research_dossier.py
+```
+
+It queries `600519.SH` for the latest three completed fiscal years with
+`scope=financials` and prints only method row counts, period labels, metric
+names, risk count, validation status, and provenance. Missing credentials print
+`{"status":"skipped"}`; fixtures are never substituted.
 
 For the opt-in real PandaData + R020 smoke test:
 
@@ -266,6 +334,7 @@ python tests\manual_test_dynamic_execution.py
 Currently supported:
 
 - Research
+- Research financial statements, financial-risk screening, and bounded A-share dossier
 - Risk
 - Report
 - Quant factor idea generation

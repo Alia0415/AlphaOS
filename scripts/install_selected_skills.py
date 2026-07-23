@@ -1,4 +1,4 @@
-"""Install only the two runtime repositories approved for AlphaOS Quant Agent."""
+"""Install only the fixed, pinned runtime repositories approved for AlphaOS."""
 
 from __future__ import annotations
 
@@ -14,27 +14,62 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_ROOT = "https://github.com"
-APPROVED_REPOSITORIES: dict[str, dict[str, str]] = {
+APPROVED_REPOSITORIES: dict[str, dict[str, Any]] = {
     "factor_idea_generation": {
         "repository": "quantskills/skill-factor-idea-generation",
+        "commit_sha": "4fda44d27bc80efe60284da6b03bc56a2bf4e82f",
         "directory": "skill-factor-idea-generation",
         "skill_path": ".",
         "license": "GPL-3.0-only",
+        "owner": "quant",
+        "mode": "instruction",
         "expected_entrypoint": "SKILL.md",
+        "critical_files": [
+            "SKILL.md",
+            "LICENSE",
+            "references/factor_shape_guidance.md",
+            "references/idea_quality_bar.md",
+            "references/output_schema.md",
+        ],
     },
     "r020_volume_expansion": {
         "repository": "quantskills/skill-quant-factor-volume-stat-alpha",
+        "commit_sha": "b169f31106f748b8746c4c1028c162e95f7277f4",
         "directory": "skill-quant-factor-volume-stat-alpha",
         "skill_path": "factors/R020-5d-z-scored-volume-expansion",
         "license": "GPL-3.0-only",
+        "owner": "quant",
+        "mode": "executable",
         "expected_entrypoint": "scripts/factor.py",
+        "critical_files": [
+            "factors/R020-5d-z-scored-volume-expansion/scripts/factor.py",
+            "LICENSE",
+        ],
+    },
+    "a_share_stock_dossier": {
+        "repository": "quantskills/skill-a-share-stock-dossier",
+        "commit_sha": "213a9cb6b36ccc3ae4c72606ff72211de7b67199",
+        "directory": "skill-a-share-stock-dossier",
+        "skill_path": ".",
+        "license": "GPL-3.0-only",
+        "owner": "research",
+        "mode": "instruction",
+        "expected_entrypoint": "SKILL.md",
+        "critical_files": [
+            "SKILL.md",
+            "references/dossier-guide.md",
+            "LICENSE",
+        ],
+        "dependency_mapping": {
+            "skill-pandadata-api": "backend.services.pandadata_client.PandaDataClient"
+        },
     },
 }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Install AlphaOS's fixed QuantSkills allowlist."
+        description="Install AlphaOS's fixed, pinned QuantSkills allowlist."
     )
     parser.add_argument(
         "--runtime-home",
@@ -58,8 +93,10 @@ def main() -> None:
     for skill_id, approved in APPROVED_REPOSITORIES.items():
         repository = approved["repository"]
         destination = runtime_home / approved["directory"]
-        _install_repository(repository, destination)
+        _install_repository(repository, approved["commit_sha"], destination)
         commit_sha = _git(destination, "rev-parse", "HEAD").strip()
+        if commit_sha != approved["commit_sha"]:
+            raise RuntimeError(f"Pinned commit checkout failed: {skill_id}")
         skill_root = (destination / approved["skill_path"]).resolve()
         entrypoint = (skill_root / approved["expected_entrypoint"]).resolve()
         if (
@@ -70,14 +107,36 @@ def main() -> None:
             raise RuntimeError(
                 f"Approved entrypoint is missing after install: {skill_id}"
             )
+        file_hashes: dict[str, str] = {}
+        for relative_path in approved["critical_files"]:
+            critical_file = (destination / relative_path).resolve()
+            if (
+                not critical_file.is_relative_to(destination.resolve())
+                or not critical_file.is_file()
+                or critical_file.is_symlink()
+            ):
+                raise RuntimeError(
+                    f"Approved critical file is missing after install: "
+                    f"{skill_id}/{relative_path}"
+                )
+            stored_path = (
+                critical_file.relative_to(skill_root).as_posix()
+                if critical_file.is_relative_to(skill_root)
+                else f"repository:{relative_path}"
+            )
+            file_hashes[stored_path] = _sha256(critical_file)
         lock_skills[skill_id] = {
             "repository": repository,
             "commit_sha": commit_sha,
             "skill_path": approved["skill_path"],
             "license": approved["license"],
             "installed_at": installed_at,
+            "owner": approved["owner"],
+            "mode": approved["mode"],
             "expected_entrypoint": approved["expected_entrypoint"],
             "entrypoint_sha256": _sha256(entrypoint),
+            "file_sha256": file_hashes,
+            "dependency_mapping": approved.get("dependency_mapping", {}),
         }
 
     payload = {
@@ -88,7 +147,7 @@ def main() -> None:
             if runtime_home.is_relative_to(PROJECT_ROOT)
             else str(runtime_home)
         ),
-        "policy": "Only the fixed AlphaOS Quant Agent allowlist may be installed.",
+        "policy": "Only the fixed, pinned AlphaOS runtime allowlist may be installed.",
         "skills": lock_skills,
     }
     lock_file.write_text(
@@ -107,7 +166,11 @@ def main() -> None:
     )
 
 
-def _install_repository(repository: str, destination: Path) -> None:
+def _install_repository(
+    repository: str,
+    commit_sha: str,
+    destination: Path,
+) -> None:
     approved = {item["repository"] for item in APPROVED_REPOSITORIES.values()}
     if repository not in approved:
         raise ValueError("Repository is not on the fixed allowlist")
@@ -124,19 +187,17 @@ def _install_repository(repository: str, destination: Path) -> None:
                 f"Existing runtime checkout has an unexpected origin: "
                 f"{destination.name}"
             )
-        _git(destination, "fetch", "--depth=1", "origin", "main")
-        _git(destination, "checkout", "--detach", "FETCH_HEAD")
-        return
-    _run(
-        "git",
-        "clone",
-        "--depth=1",
-        "--branch",
-        "main",
-        url,
-        str(destination),
-        cwd=runtime_home_parent(destination),
-    )
+    else:
+        _run(
+            "git",
+            "clone",
+            "--no-checkout",
+            url,
+            str(destination),
+            cwd=runtime_home_parent(destination),
+        )
+    _git(destination, "fetch", "--depth=1", "origin", commit_sha)
+    _git(destination, "checkout", "--detach", commit_sha)
 
 
 def runtime_home_parent(destination: Path) -> Path:

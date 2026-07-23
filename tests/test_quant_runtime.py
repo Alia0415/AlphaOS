@@ -138,6 +138,8 @@ def compute_factor(df: pd.DataFrame) -> pd.DataFrame:
                         skill_path=".",
                         entrypoint="SKILL.md",
                         entrypoint_path=idea_skill,
+                        owner="quant",
+                        mode="instruction",
                     ),
                     "r020_volume_expansion": _lock_entry(
                         repository=(
@@ -148,6 +150,8 @@ def compute_factor(df: pd.DataFrame) -> pd.DataFrame:
                         ),
                         entrypoint="scripts/factor.py",
                         entrypoint_path=factor_script,
+                        owner="quant",
+                        mode="executable",
                     ),
                 },
             }
@@ -163,6 +167,8 @@ def _lock_entry(
     skill_path: str,
     entrypoint: str,
     entrypoint_path: Path,
+    owner: str,
+    mode: str,
 ) -> dict[str, Any]:
     return {
         "repository": repository,
@@ -171,7 +177,12 @@ def _lock_entry(
         "license": "GPL-3.0-only",
         "installed_at": "2026-07-23T00:00:00+00:00",
         "expected_entrypoint": entrypoint,
+        "owner": owner,
+        "mode": mode,
         "entrypoint_sha256": hashlib.sha256(entrypoint_path.read_bytes()).hexdigest(),
+        "file_sha256": {
+            entrypoint: hashlib.sha256(entrypoint_path.read_bytes()).hexdigest()
+        },
     }
 
 

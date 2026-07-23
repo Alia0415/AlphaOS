@@ -250,6 +250,7 @@ _SAFE_AGENT_EVENT_METADATA = {
     "status",
     "selected_skill_count",
     "skill_step_count",
+    "scope",
 }
 
 

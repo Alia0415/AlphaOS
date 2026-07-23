@@ -7,14 +7,22 @@ import math
 import statistics
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
+import re
+from typing import Any, Literal
+from uuid import uuid4
 
+from backend.agents.research_skill_planner import (
+    ResearchSkillPlan,
+    ResearchSkillPlanner,
+)
 from backend.core.contracts import AgentId, ExpertResult, ExpertTask
 from backend.services.ark_client import ArkClient, ArkClientError
 from backend.services.pandadata_client import (
     PandaDataClient,
     PandaDataConfigurationError,
 )
+from backend.skills.contracts import SkillInvocation, SkillResult, SkillStatus
+from backend.skills.skill_registry import SkillRegistry
 
 
 class ResearchAgent:
@@ -24,14 +32,26 @@ class ResearchAgent:
         self,
         data_client: PandaDataClient | None = None,
         ark_client: ArkClient | None = None,
+        skill_registry: SkillRegistry | None = None,
+        skill_planner: ResearchSkillPlanner | None = None,
     ) -> None:
         self._data_client = data_client or PandaDataClient()
         self._ark_client = ark_client
+        self.skills = skill_registry or SkillRegistry(ark_client=ark_client)
+        self._skill_planner = skill_planner or ResearchSkillPlanner(
+            registry=self.skills,
+            ark_client=ark_client,
+        )
 
     def execute(self, task: ExpertTask) -> ExpertResult:
         if task.agent != AgentId.RESEARCH:
             return _failed(task, "Research Agent 收到了不匹配的任务类型。")
+        plan = self._skill_planner.create_plan(task)
+        if plan.selected_skills:
+            return self._execute_dossier(task, plan)
+        return self._execute_market(task)
 
+    def _execute_market(self, task: ExpertTask) -> ExpertResult:
         inputs = task.inputs
         symbols = _symbols(inputs.get("symbols"))
         start_date = str(inputs.get("start_date", "")).strip()
@@ -146,6 +166,406 @@ class ResearchAgent:
                 "raw_observation_count": len(rows),
             },
         )
+
+    def _execute_dossier(
+        self,
+        task: ExpertTask,
+        plan: ResearchSkillPlan,
+    ) -> ExpertResult:
+        selection = plan.selected_skills[0]
+        scope = selection.scope
+        agent_events: list[dict[str, Any]] = [
+            {
+                "type": "skill_plan_created",
+                "metadata": {
+                    "skill_id": None,
+                    "selected_skill_count": 1,
+                    "skill_step_count": 1,
+                    "scope": scope,
+                },
+            }
+        ]
+        symbol = _dossier_symbol(task.inputs)
+        if symbol is None:
+            question = (
+                "个股财报分析需要明确的 A 股代码（XXXXXX.SH 或 XXXXXX.SZ）；"
+                "当前输入无法可靠解析，请补充代码。"
+            )
+            return _failed(
+                task,
+                question,
+                metadata={
+                    "needs_clarification": True,
+                    "clarification_question": question,
+                    "skill_plan": plan.model_dump(mode="json"),
+                    "actual_skills": [],
+                    "agent_events": agent_events,
+                },
+            )
+        try:
+            start_period, end_period = _financial_period_range(task.inputs)
+        except ValueError as exc:
+            return _failed(
+                task,
+                str(exc),
+                metadata={
+                    "needs_clarification": True,
+                    "skill_plan": plan.model_dump(mode="json"),
+                    "actual_skills": [],
+                    "agent_events": agent_events,
+                },
+            )
+
+        financial_data, data_scope, tool_calls, unavailable = (
+            self._collect_dossier_data(
+                symbol=symbol,
+                start_period=start_period,
+                end_period=end_period,
+                scope=scope,
+            )
+        )
+        invocation_inputs = {
+            **task.inputs,
+            "symbol": symbol,
+            "scope": scope,
+            "start_period": start_period,
+            "end_period": end_period,
+            "financial_data": financial_data,
+            "data_scope": data_scope,
+        }
+        if unavailable:
+            invocation_inputs["data_unavailable_reason"] = unavailable
+        agent_events.append(
+            {
+                "type": "skill_started",
+                "skill_id": selection.skill_id,
+                "metadata": {
+                    "skill_id": selection.skill_id,
+                    "scope": scope,
+                },
+            }
+        )
+        result = self.skills.execute(
+            SkillInvocation(
+                invocation_id=str(uuid4()),
+                skill_id=selection.skill_id,
+                agent=AgentId.RESEARCH.value,
+                objective=task.objective,
+                inputs=invocation_inputs,
+            )
+        )
+        tool_calls.append(
+            {
+                "tool": selection.skill_id,
+                "status": result.status.value,
+                "arguments": {
+                    "symbol": symbol,
+                    "scope": scope,
+                    "start_period": start_period,
+                    "end_period": end_period,
+                },
+            }
+        )
+        event_type = (
+            "skill_completed"
+            if result.status == SkillStatus.COMPLETED
+            else "skill_failed"
+        )
+        agent_events.append(
+            {
+                "type": event_type,
+                "skill_id": selection.skill_id,
+                "metadata": {
+                    "skill_id": selection.skill_id,
+                    "status": result.status.value,
+                    "scope": scope,
+                },
+            }
+        )
+        return _dossier_expert_result(
+            task=task,
+            plan=plan,
+            scope=scope,
+            result=result,
+            tool_calls=tool_calls,
+            data_scope=data_scope,
+            agent_events=agent_events,
+        )
+
+    def _collect_dossier_data(
+        self,
+        *,
+        symbol: str,
+        start_period: str,
+        end_period: str,
+        scope: str,
+    ) -> tuple[
+        dict[str, Any],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        str | None,
+    ]:
+        calls: list[tuple[str, dict[str, Any]]] = [
+            (
+                "get_fina_reports",
+                {
+                    "symbol": symbol,
+                    "start_period": start_period,
+                    "end_period": end_period,
+                    "fields": None,
+                },
+            ),
+            (
+                "get_fina_performance",
+                {"symbol": symbol, "end_period": end_period, "fields": None},
+            ),
+            (
+                "get_fina_forecast",
+                {"symbol": symbol, "end_period": end_period, "fields": None},
+            ),
+            (
+                "get_audit_opinion",
+                {
+                    "symbol": symbol,
+                    "start_period": start_period,
+                    "end_period": end_period,
+                    "fields": None,
+                },
+            ),
+        ]
+        if scope == "full_dossier":
+            start_date = f"{start_period[:4]}0101"
+            end_date = f"{end_period[:4]}1231"
+            calls.extend(
+                [
+                    ("get_stock_detail", {"symbol": symbol}),
+                    ("get_stock_industry", {"symbol": symbol}),
+                    (
+                        "get_share_float",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_status_change",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_dividend",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_cash_dividend",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_dividend_amount",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_repurchase",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_private_placement",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_allotment",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_split",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_investor_activity",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_top_holders",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_holder_count",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_pledge",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_shareholder_change",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_restricted_list",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_stock_daily",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_lhb_list",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_lhb_detail",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_block_trade",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_margin",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                    (
+                        "get_hsgt_hold",
+                        {
+                            "symbol": symbol,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
+                    ),
+                ]
+            )
+
+        datasets: dict[str, Any] = {}
+        data_scope: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
+        financial_failures = 0
+        first_unavailable: str | None = None
+        for method, arguments in calls:
+            tool_call = {
+                "tool": method,
+                "status": "started",
+                "arguments": _safe_query_arguments(arguments),
+            }
+            tool_calls.append(tool_call)
+            try:
+                function = getattr(self._data_client, method)
+                response = function(**arguments)
+            except Exception as exc:
+                tool_call["status"] = "unavailable"
+                if method in {
+                    "get_fina_reports",
+                    "get_fina_performance",
+                    "get_fina_forecast",
+                    "get_audit_opinion",
+                }:
+                    financial_failures += 1
+                first_unavailable = first_unavailable or _safe_error(exc)
+                data_scope.append(
+                    {
+                        "method": method,
+                        "symbol": symbol,
+                        "query_range": _query_range(arguments),
+                        "row_count": 0,
+                        "latest_report_period": None,
+                        "missing_status": "unavailable",
+                    }
+                )
+                continue
+            tool_call["status"] = "completed"
+            datasets[method] = response
+            rows = _extract_rows(response)
+            data_scope.append(
+                {
+                    "method": method,
+                    "symbol": symbol,
+                    "query_range": _query_range(arguments),
+                    "row_count": len(rows),
+                    "latest_report_period": _latest_report_period(rows),
+                    "missing_status": "available" if rows else "no_data",
+                }
+            )
+        unavailable = (
+            first_unavailable
+            if financial_failures == 4
+            else None
+        )
+        return datasets, data_scope, tool_calls, unavailable
 
     def __call__(self, task: ExpertTask) -> ExpertResult:
         return self.execute(task)
@@ -370,6 +790,7 @@ def _failed(
     *,
     tool_calls: list[dict[str, Any]] | None = None,
     data_sources: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> ExpertResult:
     return ExpertResult(
         task_id=task.task_id,
@@ -379,6 +800,7 @@ def _failed(
         limitations=[error],
         tool_calls=tool_calls or [],
         data_sources=data_sources or [],
+        metadata=metadata or {},
         error=error,
     )
 
@@ -387,3 +809,170 @@ def _safe_error(exc: Exception) -> str:
     if isinstance(exc, PandaDataConfigurationError):
         return str(exc)
     return "外部市场数据服务请求失败"
+
+
+def _dossier_symbol(inputs: Mapping[str, Any]) -> str | None:
+    candidate = inputs.get("symbol")
+    if not candidate:
+        symbols = inputs.get("symbols")
+        if isinstance(symbols, list) and len(symbols) == 1:
+            candidate = symbols[0]
+    value = str(candidate or "").strip().upper()
+    if re.fullmatch(r"\d{6}\.(?:SH|SZ)", value):
+        return value
+    if re.fullmatch(r"\d{6}", value):
+        if value.startswith(("600", "601", "603", "605", "688", "689")):
+            return f"{value}.SH"
+        if value.startswith(("000", "001", "002", "003", "300", "301")):
+            return f"{value}.SZ"
+    return None
+
+
+def _financial_period_range(inputs: Mapping[str, Any]) -> tuple[str, str]:
+    start = str(inputs.get("start_period", "")).strip().lower()
+    end = str(inputs.get("end_period", "")).strip().lower()
+    if not start and not end:
+        period = str(
+            inputs.get("period", "latest_3_fiscal_years")
+        ).strip().lower()
+        match = re.fullmatch(r"latest_(\d+)_fiscal_years", period)
+        years = int(match.group(1)) if match else 3
+        if years < 1 or years > 5:
+            raise ValueError("财务年度窗口必须在一到五年之间。")
+        end_year = datetime.now().year - 1
+        return f"{end_year - years + 1}q4", f"{end_year}q4"
+    if not start or not end:
+        raise ValueError("start_period 和 end_period 必须同时提供。")
+    pattern = re.compile(r"^(\d{4})q([1-4])$")
+    start_match = pattern.fullmatch(start)
+    end_match = pattern.fullmatch(end)
+    if start_match is None or end_match is None:
+        raise ValueError("start_period 和 end_period 必须是 YYYYqN 格式。")
+    start_index = int(start_match.group(1)) * 4 + int(start_match.group(2))
+    end_index = int(end_match.group(1)) * 4 + int(end_match.group(2))
+    if start_index > end_index:
+        raise ValueError("start_period 不能晚于 end_period。")
+    if end_index - start_index > 20:
+        raise ValueError("财务查询窗口不能超过五年。")
+    return start, end
+
+
+def _safe_query_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "symbol",
+        "start_period",
+        "end_period",
+        "start_date",
+        "end_date",
+    }
+    return {
+        key: value
+        for key, value in arguments.items()
+        if key in allowed
+    }
+
+
+def _query_range(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: arguments[key]
+        for key in ("start_period", "end_period", "start_date", "end_date")
+        if key in arguments
+    }
+
+
+def _latest_report_period(rows: list[dict[str, Any]]) -> str | None:
+    values: list[str] = []
+    for row in rows:
+        for key in (
+            "quarter",
+            "end_quarter",
+            "report_period",
+            "end_date",
+            "report_date",
+            "info_date",
+            "trade_date",
+        ):
+            value = str(row.get(key, "")).strip()
+            if value:
+                values.append(value)
+                break
+    return max(values) if values else None
+
+
+def _dossier_expert_result(
+    *,
+    task: ExpertTask,
+    plan: ResearchSkillPlan,
+    scope: str,
+    result: SkillResult,
+    tool_calls: list[dict[str, Any]],
+    data_scope: list[dict[str, Any]],
+    agent_events: list[dict[str, Any]],
+) -> ExpertResult:
+    validation_status = (
+        result.data.get("overall_assessment", {}).get(
+            "validation_status",
+            "unavailable",
+        )
+        if isinstance(result.data.get("overall_assessment"), Mapping)
+        else "unavailable"
+    )
+    risks = [
+        str(item.get("statement"))
+        for item in result.data.get("risk_signals", [])
+        if isinstance(item, Mapping) and item.get("statement")
+    ]
+    evidence = [
+        {
+            "type": "skill_result",
+            "skill_id": result.skill_id,
+            "status": result.status.value,
+            "validation_status": validation_status,
+            "data": result.data,
+        }
+    ]
+    status: Literal["completed", "failed"] = (
+        "completed"
+        if result.status == SkillStatus.COMPLETED
+        else "failed"
+    )
+    data_sources = [
+        {"name": "PandaData", **item}
+        for item in data_scope
+    ]
+    if result.provenance:
+        data_sources.append(
+            {
+                "name": result.provenance.get("source_repository"),
+                "commit": result.provenance.get("source_commit"),
+                "license": result.provenance.get("license"),
+            }
+        )
+    return ExpertResult(
+        task_id=task.task_id,
+        agent=AgentId.RESEARCH,
+        status=status,
+        summary=result.summary,
+        evidence=evidence,
+        assumptions=result.assumptions,
+        risks=risks,
+        limitations=result.limitations,
+        recommendations=[
+            "将异常信号作为后续核查线索，不应直接解释为已确认原因。",
+            "公开财务数据分析不构成买卖建议或未来收益保证。",
+        ],
+        tool_calls=tool_calls,
+        data_sources=data_sources,
+        metadata={
+            "skill_plan": plan.model_dump(mode="json"),
+            "actual_skills": [result.skill_id],
+            "validation_status": validation_status,
+            "scope": scope,
+            "skill_results": {
+                result.skill_id: result.model_dump(mode="json"),
+            },
+            "agent_events": agent_events,
+            "provenance": result.provenance,
+        },
+        error=result.error if status == "failed" else None,
+    )

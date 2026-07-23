@@ -72,7 +72,17 @@ class RuntimeSkillLocator:
             raise SkillUnavailableError(
                 f"Approved entrypoint is missing for runtime skill '{spec.id}'."
             )
-        expected_hash = str(lock_entry.get("entrypoint_sha256", "")).strip()
+        file_hashes = lock_entry.get("file_sha256", {})
+        if not isinstance(file_hashes, dict):
+            raise SkillUnavailableError(
+                f"Lock file hashes are invalid for runtime skill '{spec.id}'."
+            )
+        expected_hash = str(
+            file_hashes.get(
+                spec.expected_entrypoint,
+                lock_entry.get("entrypoint_sha256", ""),
+            )
+        ).strip()
         if expected_hash and _sha256(entrypoint) != expected_hash:
             raise SkillUnavailableError(
                 f"Approved entrypoint hash mismatch for runtime skill '{spec.id}'."
@@ -84,8 +94,47 @@ class RuntimeSkillLocator:
             "license": lock_entry["license"],
             "skill_path": lock_entry["skill_path"],
             "expected_entrypoint": lock_entry["expected_entrypoint"],
+            "owner": lock_entry["owner"],
+            "mode": lock_entry["mode"],
+            "dependency_mapping": lock_entry.get("dependency_mapping", {}),
         }
         return entrypoint, provenance
+
+    def resolve_reference(
+        self,
+        spec: SkillSpec,
+        reference: str,
+    ) -> Path:
+        if reference not in spec.allowed_references:
+            raise ValueError(
+                f"Reference is not allowlisted for skill '{spec.id}': {reference}"
+            )
+        entrypoint, _ = self.resolve_entrypoint(spec)
+        skill_root = entrypoint.parent.resolve()
+        path = (skill_root / reference).resolve()
+        references_root = (skill_root / "references").resolve()
+        if (
+            not path.is_relative_to(references_root)
+            or not path.is_file()
+            or path.is_symlink()
+        ):
+            raise ValueError(f"Unsafe or missing skill reference: {reference}")
+        lock_entry = self._lock_entry(spec)
+        file_hashes = lock_entry.get("file_sha256", {})
+        expected_hash = (
+            str(file_hashes.get(reference, "")).strip()
+            if isinstance(file_hashes, dict)
+            else ""
+        )
+        if reference in spec.required_references and not expected_hash:
+            raise SkillUnavailableError(
+                f"Required reference hash is missing for runtime skill '{spec.id}'."
+            )
+        if expected_hash and _sha256(path) != expected_hash:
+            raise SkillUnavailableError(
+                f"Approved reference hash mismatch for runtime skill '{spec.id}'."
+            )
+        return path
 
     def skill_root(self, spec: SkillSpec) -> Path:
         entrypoint, _ = self.resolve_entrypoint(spec)
@@ -110,6 +159,8 @@ class RuntimeSkillLocator:
             "license",
             "installed_at",
             "expected_entrypoint",
+            "owner",
+            "mode",
         }
         if not isinstance(entry, dict) or required - set(entry):
             raise SkillUnavailableError(
@@ -119,9 +170,22 @@ class RuntimeSkillLocator:
             entry["repository"] != spec.source_repository
             or entry["license"] != spec.license
             or entry["expected_entrypoint"] != spec.expected_entrypoint
+            or entry["owner"] not in spec.owner_agents
+            or entry["mode"] != spec.mode.value
         ):
             raise SkillUnavailableError(
                 f"Lock metadata does not match the allowlist for skill '{spec.id}'."
+            )
+        commit_sha = str(entry["commit_sha"])
+        if len(commit_sha) != 40 or any(
+            character not in "0123456789abcdef" for character in commit_sha.lower()
+        ):
+            raise SkillUnavailableError(
+                f"Lock commit is invalid for runtime skill '{spec.id}'."
+            )
+        if spec.source_ref != "locked" and commit_sha != spec.source_ref:
+            raise SkillUnavailableError(
+                f"Lock commit does not match the pinned ref for skill '{spec.id}'."
             )
         return entry
 
@@ -153,25 +217,15 @@ class InstructionSkillLoader:
         references: tuple[str, ...] = (),
     ) -> LoadedInstructionSkill:
         entrypoint, provenance = self.locator.resolve_entrypoint(spec)
-        skill_root = entrypoint.parent.resolve()
         remaining = self.max_text_length
         instructions, remaining, truncated = _bounded_read(entrypoint, remaining)
         loaded_references: dict[str, str] = {}
 
-        allowed = set(spec.allowed_references)
-        for reference in references:
-            if reference not in allowed:
-                raise ValueError(
-                    f"Reference is not allowlisted for skill '{spec.id}': {reference}"
-                )
-            path = (skill_root / reference).resolve()
-            references_root = (skill_root / "references").resolve()
-            if (
-                not path.is_relative_to(references_root)
-                or not path.is_file()
-                or path.is_symlink()
-            ):
-                raise ValueError(f"Unsafe or missing skill reference: {reference}")
+        requested_references = tuple(
+            dict.fromkeys((*spec.required_references, *references))
+        )
+        for reference in requested_references:
+            path = self.locator.resolve_reference(spec, reference)
             text, remaining, item_truncated = _bounded_read(path, remaining)
             loaded_references[reference] = text
             truncated = truncated or item_truncated

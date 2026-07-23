@@ -41,18 +41,30 @@ class SkillSpec(BaseModel):
     runtime_path: str = Field(min_length=1)
     expected_entrypoint: str = Field(min_length=1)
     allowed_references: list[str] = Field(default_factory=list)
+    required_references: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
     required_task_inputs: list[str] = Field(default_factory=list)
+    optional_task_inputs: list[str] = Field(default_factory=list)
 
     @field_validator(
         "owner_agents",
         "allowed_references",
+        "required_references",
+        "capabilities",
         "required_task_inputs",
+        "optional_task_inputs",
     )
     @classmethod
     def values_must_be_unique(cls, values: list[str]) -> list[str]:
         if len(values) != len(set(values)):
             raise ValueError("SkillSpec list values must be unique")
         return values
+
+    @model_validator(mode="after")
+    def required_references_are_allowlisted(self) -> "SkillSpec":
+        if not set(self.required_references).issubset(self.allowed_references):
+            raise ValueError("Required references must also be allowlisted")
+        return self
 
 
 class SkillInvocation(BaseModel):

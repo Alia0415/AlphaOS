@@ -36,14 +36,32 @@ DEFAULT_EXPERTS = (
     AgentDefinition(
         id=AgentId.RESEARCH,
         name="Research Agent",
-        description="负责公司、行业和市场研究，并基于真实市场数据整理证据",
+        description=(
+            "负责公司、行业和市场研究，以及单公司财报、基本面和财务风险分析"
+        ),
         enabled=True,
-        tools=("pandadata_market_data",),
-        accepted_inputs=("symbols", "start_date", "end_date", "fields"),
+        tools=("pandadata_market_data", "a_share_stock_dossier"),
+        accepted_inputs=(
+            "symbol",
+            "symbols",
+            "start_date",
+            "end_date",
+            "fields",
+            "period",
+            "start_period",
+            "end_period",
+            "scope",
+            "focus",
+            "research_goal",
+        ),
         capabilities=(
             "market_analysis",
             "company_research",
             "industry_research",
+            "financial_statement_analysis",
+            "company_fundamental_analysis",
+            "a_share_due_diligence",
+            "financial_risk_screening",
         ),
     ),
     AgentDefinition(

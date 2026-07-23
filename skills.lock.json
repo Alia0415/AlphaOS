@@ -1,26 +1,62 @@
 {
   "version": 1,
-  "generated_at": "2026-07-23T06:47:45.548803+00:00",
+  "generated_at": "2026-07-23T14:26:36.769456+00:00",
   "runtime_home": ".runtime_skills",
-  "policy": "Only the fixed AlphaOS Quant Agent allowlist may be installed.",
+  "policy": "Only the fixed, pinned AlphaOS runtime allowlist may be installed.",
   "skills": {
     "factor_idea_generation": {
       "repository": "quantskills/skill-factor-idea-generation",
       "commit_sha": "4fda44d27bc80efe60284da6b03bc56a2bf4e82f",
       "skill_path": ".",
       "license": "GPL-3.0-only",
-      "installed_at": "2026-07-23T06:47:45.548803+00:00",
+      "installed_at": "2026-07-23T14:26:36.769456+00:00",
+      "owner": "quant",
+      "mode": "instruction",
       "expected_entrypoint": "SKILL.md",
-      "entrypoint_sha256": "ee0c5a0ac90614d9a52d592027ffd55dbb657326c3b724b2e0266ff10c174530"
+      "entrypoint_sha256": "ee0c5a0ac90614d9a52d592027ffd55dbb657326c3b724b2e0266ff10c174530",
+      "file_sha256": {
+        "SKILL.md": "ee0c5a0ac90614d9a52d592027ffd55dbb657326c3b724b2e0266ff10c174530",
+        "LICENSE": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+        "references/factor_shape_guidance.md": "5aaadf5fe33828acded75d7c91346f4d69bff061a5ac52e8059ef31264b8f6f8",
+        "references/idea_quality_bar.md": "64a351e7fbc4227950fccde9c3c887555973361d3410f2045be680902beea505",
+        "references/output_schema.md": "be99e69ba6f301c603a5de20055a4ad1f90cab385ffeba562bdc3b87b8a75515"
+      },
+      "dependency_mapping": {}
     },
     "r020_volume_expansion": {
       "repository": "quantskills/skill-quant-factor-volume-stat-alpha",
       "commit_sha": "b169f31106f748b8746c4c1028c162e95f7277f4",
       "skill_path": "factors/R020-5d-z-scored-volume-expansion",
       "license": "GPL-3.0-only",
-      "installed_at": "2026-07-23T06:47:45.548803+00:00",
+      "installed_at": "2026-07-23T14:26:36.769456+00:00",
+      "owner": "quant",
+      "mode": "executable",
       "expected_entrypoint": "scripts/factor.py",
-      "entrypoint_sha256": "eba18ff5abbd27ec9cf79c846186cf4069b29e8280d0de0e9ecb9fc8e8fb5f17"
+      "entrypoint_sha256": "eba18ff5abbd27ec9cf79c846186cf4069b29e8280d0de0e9ecb9fc8e8fb5f17",
+      "file_sha256": {
+        "scripts/factor.py": "eba18ff5abbd27ec9cf79c846186cf4069b29e8280d0de0e9ecb9fc8e8fb5f17",
+        "repository:LICENSE": "e57f1c320b8cf8798a7d2ff83a6f9e06a33a03585f6e065fea97f1d86db84052"
+      },
+      "dependency_mapping": {}
+    },
+    "a_share_stock_dossier": {
+      "repository": "quantskills/skill-a-share-stock-dossier",
+      "commit_sha": "213a9cb6b36ccc3ae4c72606ff72211de7b67199",
+      "skill_path": ".",
+      "license": "GPL-3.0-only",
+      "installed_at": "2026-07-23T14:26:36.769456+00:00",
+      "owner": "research",
+      "mode": "instruction",
+      "expected_entrypoint": "SKILL.md",
+      "entrypoint_sha256": "0cb86603769251e24a58d6c28c9481f8fca3526a28bbd6f8ef8cf1b1ea7761ab",
+      "file_sha256": {
+        "SKILL.md": "0cb86603769251e24a58d6c28c9481f8fca3526a28bbd6f8ef8cf1b1ea7761ab",
+        "references/dossier-guide.md": "7434131ebe04dc986d3393c87e533ded97dc293d89b7ec9f680770a0bc8047ad",
+        "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      "dependency_mapping": {
+        "skill-pandadata-api": "backend.services.pandadata_client.PandaDataClient"
+      }
     }
   }
 }

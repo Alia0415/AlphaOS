@@ -32,6 +32,8 @@ FACTOR_IDEA_REFERENCES = [
     "references/output_schema.md",
 ]
 
+DOSSIER_REFERENCES = ["references/dossier-guide.md"]
+
 
 DEFAULT_SKILLS = (
     SkillSpec(
@@ -60,6 +62,7 @@ DEFAULT_SKILLS = (
         runtime_path="skill-factor-idea-generation",
         expected_entrypoint="SKILL.md",
         allowed_references=FACTOR_IDEA_REFERENCES,
+        capabilities=["factor_ideation"],
     ),
     SkillSpec(
         id="r020_volume_expansion",
@@ -97,7 +100,76 @@ DEFAULT_SKILLS = (
             "factors/R020-5d-z-scored-volume-expansion"
         ),
         expected_entrypoint="scripts/factor.py",
+        capabilities=["factor_computation"],
         required_task_inputs=["symbols", "start_date", "end_date"],
+    ),
+    SkillSpec(
+        id="a_share_stock_dossier",
+        name="A-Share Stock Dossier",
+        description=(
+            "对单只 A 股执行可溯源的财报、财务风险或完整基本面尽调分析"
+        ),
+        mode=SkillMode.INSTRUCTION,
+        enabled=True,
+        owner_agents=["research"],
+        input_schema={
+            "type": "object",
+            "x-data-source": "pandadata_financial_data",
+            "properties": {
+                "symbol": {"type": "string"},
+                "scope": {
+                    "type": "string",
+                    "enum": ["financials", "financial_risk", "full_dossier"],
+                },
+                "period": {"type": "string"},
+                "start_period": {"type": "string"},
+                "end_period": {"type": "string"},
+                "focus": {"type": "array", "items": {"type": "string"}},
+                "research_goal": {"type": "string"},
+            },
+            "required": ["symbol"],
+        },
+        output_schema={
+            "type": "object",
+            "required": [
+                "symbol",
+                "scope",
+                "periods",
+                "overall_assessment",
+                "growth",
+                "profitability",
+                "cash_flow_quality",
+                "solvency",
+                "operating_efficiency",
+                "audit_and_forecast",
+                "positive_signals",
+                "risk_signals",
+                "missing_information",
+                "data_scope",
+            ],
+        },
+        source_repository="quantskills/skill-a-share-stock-dossier",
+        source_ref="213a9cb6b36ccc3ae4c72606ff72211de7b67199",
+        license="GPL-3.0-only",
+        runtime_path="skill-a-share-stock-dossier",
+        expected_entrypoint="SKILL.md",
+        allowed_references=DOSSIER_REFERENCES,
+        required_references=DOSSIER_REFERENCES,
+        capabilities=[
+            "financial_statement_analysis",
+            "company_fundamental_analysis",
+            "a_share_due_diligence",
+            "financial_risk_screening",
+        ],
+        required_task_inputs=["symbol"],
+        optional_task_inputs=[
+            "scope",
+            "period",
+            "start_period",
+            "end_period",
+            "focus",
+            "research_goal",
+        ],
     ),
 )
 
@@ -155,6 +227,7 @@ class SkillRegistry:
                 "name": spec.name,
                 "description": spec.description,
                 "mode": spec.mode.value,
+                "capabilities": spec.capabilities,
                 "input_schema": spec.input_schema,
                 "output_schema": spec.output_schema,
             }
@@ -205,6 +278,9 @@ class SkillRegistry:
         from backend.skills.adapters.r020_volume_expansion import (
             R020VolumeExpansionAdapter,
         )
+        from backend.skills.adapters.a_share_stock_dossier import (
+            AShareStockDossierAdapter,
+        )
         from backend.skills.loaders.instruction_skill_loader import (
             InstructionSkillLoader,
         )
@@ -216,6 +292,9 @@ class SkillRegistry:
             ),
             "r020_volume_expansion": R020VolumeExpansionAdapter(
                 locator=self.locator
+            ),
+            "a_share_stock_dossier": AShareStockDossierAdapter(
+                loader=InstructionSkillLoader(locator=self.locator),
             ),
         }
         for skill_id, adapter in defaults.items():

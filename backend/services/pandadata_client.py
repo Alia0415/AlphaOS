@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -9,6 +10,9 @@ from typing import Any
 from dotenv import load_dotenv
 
 ALPHAOS_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+SYMBOL_PATTERN = re.compile(r"^\d{6}\.(?:SH|SZ)$")
+QUARTER_PATTERN = re.compile(r"^(\d{4})q([1-4])$", re.IGNORECASE)
+DATE_PATTERN = re.compile(r"^\d{8}$")
 
 MACRO_DATASETS: dict[str, tuple[str, str]] = {
     "NA": ("get_macro_na", "国民经济核算"),
@@ -157,6 +161,385 @@ class PandaDataClient:
             )
         )
 
+    def get_fina_reports(
+        self,
+        *,
+        symbol: str,
+        start_period: str,
+        end_period: str,
+        fields: list[str] | None = None,
+    ) -> Any:
+        symbol = _validate_symbol(symbol)
+        start_period, end_period = _validate_period_range(
+            start_period,
+            end_period,
+        )
+        return self._call(
+            "get_fina_reports",
+            symbol=symbol,
+            start_quarter=start_period,
+            end_quarter=end_period,
+            fields=fields,
+            is_latest=False,
+        )
+
+    def get_fina_performance(
+        self,
+        *,
+        symbol: str,
+        end_period: str,
+        fields: list[str] | None = None,
+    ) -> Any:
+        return self._call(
+            "get_fina_performance",
+            symbol=_validate_symbol(symbol),
+            end_quarter=_validate_period(end_period),
+            fields=fields,
+        )
+
+    def get_fina_forecast(
+        self,
+        *,
+        symbol: str,
+        end_period: str,
+        fields: list[str] | None = None,
+    ) -> Any:
+        return self._call(
+            "get_fina_forecast",
+            symbol=_validate_symbol(symbol),
+            end_quarter=_validate_period(end_period),
+            fields=fields,
+        )
+
+    def get_audit_opinion(
+        self,
+        *,
+        symbol: str,
+        start_period: str,
+        end_period: str,
+        fields: list[str] | None = None,
+    ) -> Any:
+        symbol = _validate_symbol(symbol)
+        start_period, end_period = _validate_period_range(
+            start_period,
+            end_period,
+        )
+        return self._call(
+            "get_audit_opinion",
+            symbol=symbol,
+            start_quarter=start_period,
+            end_quarter=end_period,
+            market="cn",
+            fields=fields,
+        )
+
+    def get_stock_detail(self, *, symbol: str) -> Any:
+        return self._call("get_stock_detail", symbol=_validate_symbol(symbol))
+
+    def get_stock_industry(self, *, symbol: str) -> Any:
+        return self._call(
+            "get_stock_industry",
+            stock_symbol=_validate_symbol(symbol),
+            level="L1",
+        )
+
+    def get_stock_dividend(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_dividend",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_share_float(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call("get_share_float", symbol, start_date, end_date)
+
+    def get_stock_status_change(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_status_change",
+            symbol,
+            start_date,
+            end_date,
+        )
+
+    def get_stock_cash_dividend(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_cash_dividend",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_stock_dividend_amount(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_dividend_amount",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_repurchase(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call("get_repurchase", symbol, start_date, end_date)
+
+    def get_stock_private_placement(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_private_placement",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_stock_allotment(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_allotment",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_stock_split(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_split",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_investor_activity(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_investor_activity",
+            symbol,
+            start_date,
+            end_date,
+        )
+
+    def get_top_holders(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_top_holders",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_holder_count(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_holder_count",
+            symbol,
+            start_date,
+            end_date,
+        )
+
+    def get_stock_pledge(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_pledge",
+            symbol,
+            start_date,
+            end_date,
+        )
+
+    def get_stock_shareholder_change(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_shareholder_change",
+            symbol,
+            start_date,
+            end_date,
+        )
+
+    def get_restricted_list(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_restricted_list",
+            symbol,
+            start_date,
+            end_date,
+            market="cn",
+        )
+
+    def get_stock_daily(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call(
+            "get_stock_daily",
+            symbol,
+            start_date,
+            end_date,
+            fields=["trade_date", "symbol", "close", "volume"],
+            indicator="000300",
+            st=True,
+        )
+
+    def get_lhb_list(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call("get_lhb_list", symbol, start_date, end_date)
+
+    def get_lhb_detail(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call("get_lhb_detail", symbol, start_date, end_date)
+
+    def get_block_trade(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call("get_block_trade", symbol, start_date, end_date)
+
+    def get_margin(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call("get_margin", symbol, start_date, end_date)
+
+    def get_hsgt_hold(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        return self._dated_call("get_hsgt_hold", symbol, start_date, end_date)
+
+    def _dated_call(
+        self,
+        method: str,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        **kwargs: Any,
+    ) -> Any:
+        symbol = _validate_symbol(symbol)
+        start_date, end_date = _validate_date_range(start_date, end_date)
+        return self._call(
+            method,
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            **kwargs,
+        )
+
+    def _call(self, method: str, **kwargs: Any) -> Any:
+        sdk = self._authenticate()
+        function = getattr(sdk, method, None)
+        if not callable(function):
+            raise PandaDataConfigurationError(
+                f"PandaData SDK 不支持受控方法 {method}。"
+            )
+        return json_safe(function(**kwargs))
+
     def _authenticate(self) -> Any:
         username = os.getenv("PANDADATA_USERNAME", "").strip()
         password = os.getenv("PANDADATA_PASSWORD", "")
@@ -219,3 +602,42 @@ def json_safe(value: Any) -> Any:
         except (TypeError, ValueError):
             pass
     return str(value)
+
+
+def _validate_symbol(symbol: str) -> str:
+    normalized = str(symbol).strip().upper()
+    if not SYMBOL_PATTERN.fullmatch(normalized):
+        raise ValueError("股票代码必须是 XXXXXX.SH 或 XXXXXX.SZ。")
+    return normalized
+
+
+def _validate_period(period: str) -> str:
+    normalized = str(period).strip().lower()
+    if not QUARTER_PATTERN.fullmatch(normalized):
+        raise ValueError("财务报告期必须是 YYYYqN 格式。")
+    return normalized
+
+
+def _validate_period_range(start_period: str, end_period: str) -> tuple[str, str]:
+    start = _validate_period(start_period)
+    end = _validate_period(end_period)
+    start_match = QUARTER_PATTERN.fullmatch(start)
+    end_match = QUARTER_PATTERN.fullmatch(end)
+    assert start_match is not None and end_match is not None
+    start_index = int(start_match.group(1)) * 4 + int(start_match.group(2))
+    end_index = int(end_match.group(1)) * 4 + int(end_match.group(2))
+    if start_index > end_index:
+        raise ValueError("start_period 不能晚于 end_period。")
+    if end_index - start_index > 20:
+        raise ValueError("财务查询窗口不能超过五年。")
+    return start, end
+
+
+def _validate_date_range(start_date: str, end_date: str) -> tuple[str, str]:
+    start = str(start_date).strip()
+    end = str(end_date).strip()
+    if not DATE_PATTERN.fullmatch(start) or not DATE_PATTERN.fullmatch(end):
+        raise ValueError("日期必须是 YYYYMMDD 格式。")
+    if start > end:
+        raise ValueError("start_date 不能晚于 end_date。")
+    return start, end
