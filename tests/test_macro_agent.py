@@ -226,3 +226,138 @@ def test_macro_agent_uses_dynamic_pandadata_evidence_and_returns_contract() -> N
         for call in data.data_calls
     )
     assert len(ark.prompts) == 3
+
+
+def valid_analysis() -> dict[str, Any]:
+    return {
+        "conclusion": "中性",
+        "economic_cycle": "平稳",
+        "interest_rate": "中性",
+        "policy_factors": [],
+        "liquidity": "平稳",
+        "market_environment": "中性",
+        "positive_factors": [],
+        "risks": ["数据发布存在滞后"],
+    }
+
+
+def test_macro_rejects_catalog_external_symbol_without_data_call() -> None:
+    ark = MockArk(
+        {
+            "categories": ["CI"],
+            "indicator_search_terms": ["景气"],
+            "reasoning": ["周期"],
+        },
+        {
+            "indicators": [
+                {"symbol": "EVIL0001", "rationale": "not in catalog"}
+            ]
+        },
+        {
+            "indicators": [
+                {"symbol": "STILL_EVIL", "rationale": "not in catalog"}
+            ]
+        },
+    )
+    data = MockMacroData()
+
+    result = MacroAgent(
+        data_client=data,
+        ark_client=ark,
+        today_provider=lambda: date(2026, 7, 23),
+    ).execute(macro_task())
+
+    assert result.status == "failed"
+    assert data.data_calls == []
+    assert len(ark.prompts) == 3
+
+
+def test_macro_structured_stages_share_one_repair_attempt() -> None:
+    ark = MockArk(
+        "not-json",
+        {
+            "categories": ["CI"],
+            "indicator_search_terms": ["景气"],
+            "reasoning": ["周期"],
+        },
+        "also-not-json",
+    )
+    data = MockMacroData()
+
+    result = MacroAgent(
+        data_client=data,
+        ark_client=ark,
+        today_provider=lambda: date(2026, 7, 23),
+    ).execute(macro_task())
+
+    assert result.status == "failed"
+    assert len(ark.prompts) == 3
+
+
+def test_macro_fails_instead_of_using_model_only_when_catalog_is_empty() -> None:
+    data = MockMacroData()
+    data.get_macro_catalog = lambda **kwargs: []
+    ark = MockArk(
+        {
+            "categories": ["CI"],
+            "indicator_search_terms": ["景气"],
+            "reasoning": ["周期"],
+        }
+    )
+
+    result = MacroAgent(
+        data_client=data,
+        ark_client=ark,
+        today_provider=lambda: date(2026, 7, 23),
+    ).execute(macro_task())
+
+    assert result.status == "failed"
+    assert result.data_sources == []
+    assert len(ark.prompts) == 1
+
+
+def test_macro_continues_with_partial_api_failure() -> None:
+    class PartialData(MockMacroData):
+        def get_macro_data(self, **kwargs: Any) -> list[dict[str, Any]]:
+            self.data_calls.append(kwargs)
+            if kwargs["api_name"] == "get_macro_ep":
+                raise RuntimeError("provider detail must be redacted")
+            return [
+                {
+                    "symbol": "CI0000001",
+                    "period_date": "20260531",
+                    "data_value": 49.0,
+                },
+                {
+                    "symbol": "CI0000001",
+                    "period_date": "20260630",
+                    "data_value": 50.0,
+                },
+            ]
+
+    data = PartialData()
+    ark = MockArk(
+        {
+            "categories": ["CI", "EP"],
+            "indicator_search_terms": ["景气", "新能源"],
+            "reasoning": ["周期和行业"],
+        },
+        {
+            "indicators": [
+                {"symbol": "CI0000001", "rationale": "周期"},
+                {"symbol": "EP0000001", "rationale": "行业"},
+            ]
+        },
+        valid_analysis(),
+    )
+
+    result = MacroAgent(
+        data_client=data,
+        ark_client=ark,
+        today_provider=lambda: date(2026, 7, 23),
+    ).execute(macro_task())
+
+    assert result.status == "completed"
+    assert [item["symbol"] for item in result.evidence] == ["CI0000001"]
+    assert any("部分" in item for item in result.limitations)
+    assert "provider detail" not in result.model_dump_json()
