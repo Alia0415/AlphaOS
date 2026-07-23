@@ -13,15 +13,20 @@ from backend.agents.router_agent import (
     RouterAgent,
     RouterAgentError,
 )
+from backend.agents.manager_agent import ManagerAgent, ManagerAgentError
+from backend.core.contracts import ExecutionPlan, TaskExecutionResponse
+from backend.core.workflow_executor import WorkflowExecutor
 from backend.services.pandadata_client import (
     PandaDataClient,
     PandaDataConfigurationError,
 )
 
 
-app = FastAPI(title="AlphaOS API", version="0.1.0")
+app = FastAPI(title="AlphaOS API", version="0.2.0")
 pandadata = PandaDataClient()
 router = RouterAgent()
+manager = ManagerAgent()
+workflow_executor = WorkflowExecutor()
 
 
 class RouteRequest(BaseModel):
@@ -84,12 +89,41 @@ async def pandadata_status() -> dict[str, object]:
     return pandadata.status()
 
 
-@app.post("/api/route", response_model=RouteDecision)
+@app.post("/api/route", response_model=RouteDecision, deprecated=True)
 async def route_request(request: RouteRequest) -> RouteDecision:
     try:
         return await run_in_threadpool(router.route, request.prompt)
     except RouterAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/plan", response_model=ExecutionPlan)
+async def plan_request(request: RouteRequest) -> ExecutionPlan:
+    try:
+        return await run_in_threadpool(manager.create_plan, request.prompt)
+    except ManagerAgentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/tasks", response_model=TaskExecutionResponse)
+async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
+    try:
+        plan = await run_in_threadpool(manager.create_plan, request.prompt)
+        events, results = await run_in_threadpool(workflow_executor.execute, plan)
+        final_answer = await run_in_threadpool(
+            manager.synthesize,
+            request.prompt,
+            plan,
+            results,
+        )
+    except ManagerAgentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return TaskExecutionResponse(
+        plan=plan,
+        execution_events=events,
+        expert_results=results,
+        final_answer=final_answer,
+    )
 
 
 @app.post("/api/market-data", response_model=MarketDataResponse)
