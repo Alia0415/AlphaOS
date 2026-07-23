@@ -135,13 +135,27 @@ class MacroAgent:
             if invalid:
                 raise MacroAgentError("Macro 选择了未授权的宏观分类。")
 
+            catalog_call = {
+                "tool": "pandadata_macro_catalog",
+                "status": "started",
+                "arguments": {
+                    "categories": plan.categories,
+                    "fields": CATALOG_FIELDS,
+                },
+            }
             catalog_rows = self._data_client.get_macro_catalog(
                 categories=plan.categories,
                 fields=CATALOG_FIELDS,
             )
+            catalog_call["status"] = "completed"
+            catalog_call["row_count"] = len(_extract_rows(catalog_rows))
             candidates = _bound_catalog(catalog_rows, plan)
             if not candidates:
-                return _failed(task, "PandaData 未返回可用的宏观指标目录。")
+                return _failed(
+                    task,
+                    "PandaData 未返回可用的宏观指标目录。",
+                    tool_calls=[catalog_call],
+                )
             catalog_by_symbol = {row["symbol"]: row for row in candidates}
 
             selection = _structured_stage(
@@ -159,11 +173,12 @@ class MacroAgent:
 
             (
                 evidence,
-                tool_calls,
+                series_tool_calls,
                 data_sources,
                 any_failed,
                 any_success,
             ) = self._fetch_series(selection, catalog_by_symbol, start_date, end_date)
+            tool_calls = [catalog_call, *series_tool_calls]
             if not any_success or not evidence:
                 return _failed(
                     task,
@@ -500,15 +515,15 @@ def _series_summary(
             continue
         observations.append({"period_date": period, "data_value": value})
     observations.sort(key=lambda item: item["period_date"])
-    observations = observations[-MAX_RECENT_OBSERVATIONS:]
     if not observations:
         return None
 
-    latest = observations[-1]
+    recent = observations[-MAX_RECENT_OBSERVATIONS:]
+    latest = recent[-1]
     latest_value = latest["data_value"]
     previous_value = (
-        observations[-2]["data_value"]
-        if len(observations) >= 2
+        recent[-2]["data_value"]
+        if len(recent) >= 2
         else latest_value
     )
     return {
@@ -529,7 +544,7 @@ def _series_summary(
             else None
         ),
         "observation_count": len(observations),
-        "recent_observations": observations[-MAX_RECENT_OBSERVATIONS:],
+        "recent_observations": recent,
     }
 
 
@@ -697,7 +712,7 @@ def _failed(
 ) -> ExpertResult:
     return ExpertResult(
         task_id=task.task_id,
-        agent=task.agent,
+        agent=AgentId.MACRO,
         status="failed",
         summary="Macro Agent 未能完成宏观分析。",
         limitations=[message],

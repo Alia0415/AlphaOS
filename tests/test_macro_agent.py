@@ -227,6 +227,11 @@ def test_macro_agent_uses_dynamic_pandadata_evidence_and_returns_contract() -> N
         for call in data.data_calls
     )
     assert len(ark.prompts) == 3
+    assert result.tool_calls[0]["tool"] == "pandadata_macro_catalog"
+    assert result.tool_calls[0]["status"] == "completed"
+    assert any(
+        call["tool"] == "pandadata_macro_data" for call in result.tool_calls
+    )
 
 
 def valid_analysis() -> dict[str, Any]:
@@ -315,6 +320,8 @@ def test_macro_fails_instead_of_using_model_only_when_catalog_is_empty() -> None
     assert result.status == "failed"
     assert result.data_sources == []
     assert len(ark.prompts) == 1
+    assert result.agent == AgentId.MACRO
+    assert result.tool_calls[0]["tool"] == "pandadata_macro_catalog"
 
 
 def test_macro_continues_with_partial_api_failure() -> None:
