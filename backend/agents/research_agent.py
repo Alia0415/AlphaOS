@@ -229,7 +229,7 @@ def _calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if close_key is None:
         raise ValueError("缺少 close 收盘价字段")
 
-    ordered = sorted(rows, key=lambda row: str(row.get(date_key, "")))
+    ordered = sorted(rows, key=lambda row: str(row.get(date_key or "", "")))
     closes = [_number(row.get(close_key)) for row in ordered]
     if any(value is None for value in closes):
         raise ValueError("close 收盘价包含空值或非数值")

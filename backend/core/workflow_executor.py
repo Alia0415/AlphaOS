@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
 from backend.agents.quant_agent import QuantAgent
 from backend.agents.report_agent import ReportAgent
@@ -229,7 +229,7 @@ def _event(
     metadata: dict[str, Any] | None = None,
 ) -> ExecutionEvent:
     return ExecutionEvent(
-        type=event_type,
+        type=cast(Any, event_type),
         step_id=step_id,
         agent=agent,
         message=message,

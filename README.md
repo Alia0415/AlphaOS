@@ -81,6 +81,26 @@ $env:PANDADATA_PASSWORD = "your-pandaai-password"
 uvicorn backend.main:app --reload
 ```
 
+Then open the local demo console:
+
+```text
+http://127.0.0.1:8000/
+```
+
+The frontend has no Node.js build step. Its default **Demo mode** uses clearly
+labelled local example responses so the orchestration UI can be presented
+without external credentials. **Live API mode** calls the existing
+`POST /api/tasks` endpoint and therefore requires Ark configuration; tasks
+that fetch market data also require PandaData credentials. The interactive API
+documentation remains available at `http://127.0.0.1:8000/docs`.
+
+The default result view explains what happened, what the evidence means, how
+reliable it is, what is missing, and what to validate next. The separate
+professional-evidence view retains the dynamic task graph, complete expert
+contracts, raw validation states, provenance, and technical execution events.
+Both views are deterministic presentations of the same response; no research
+evidence is generated in the browser.
+
 The default runtime directory is `AlphaOS/.runtime_skills`, which is ignored
 by Git. Override it with an absolute path or a path relative to `AlphaOS`:
 

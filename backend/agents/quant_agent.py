@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -588,7 +588,7 @@ def _expert_result(
         if len(statuses) == 1
         else "mixed_unvalidated"
     )
-    status = "failed" if failed else "completed"
+    status: Literal["completed", "failed"] = "failed" if failed else "completed"
     return ExpertResult(
         task_id=task.task_id,
         agent=AgentId.QUANT,

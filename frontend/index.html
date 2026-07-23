@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="AlphaOS 动态多智能体量化研究组织演示台"
+    />
+    <title>AlphaOS · Research Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="AlphaOS 首页">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span>
+          <strong>AlphaOS</strong>
+          <small>RESEARCH OPERATING SYSTEM</small>
+        </span>
+      </a>
+      <div class="topbar-actions">
+        <div class="service-status" id="serviceStatus">
+          <span class="status-dot"></span>
+          <span>正在连接</span>
+        </div>
+        <a class="ghost-link" href="/docs" target="_blank" rel="noreferrer">
+          API Docs
+          <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="eyebrow"><span></span> ALPHAOS v0.3 · RESEARCH WORKSPACE</div>
+        <h1>让复杂的金融研究<br /><em>变成看得懂的结论</em></h1>
+        <p>
+          研究经理会理解目标、组织合适的专家并核对证据边界；你先看到结论与缺口，需要时再进入完整专业证据。
+        </p>
+        <div class="architecture" aria-label="AlphaOS 工作流程">
+          <span>User</span><i>→</i><span class="accent">Manager</span><i>→</i>
+          <span>Task Graph</span><i>→</i><span>Expert Pool</span><i>→</i>
+          <span>Synthesis</span>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="console-card">
+          <div class="card-heading">
+            <div>
+              <span class="section-number">01</span>
+              <h2>你想研究什么？</h2>
+            </div>
+            <div class="mode-switch" role="group" aria-label="研究运行方式">
+              <button class="mode-button active" data-mode="demo" type="button">
+                演示示例
+              </button>
+              <button class="mode-button" data-mode="live" type="button">
+                真实研究
+              </button>
+            </div>
+          </div>
+
+          <label class="sr-only" for="taskPrompt">研究任务</label>
+          <textarea
+            id="taskPrompt"
+            rows="4"
+            maxlength="20000"
+            placeholder="描述你希望 AlphaOS 完成的研究任务…"
+          >计算 000001.SZ、000002.SZ 和 600519.SH 在 2024 年的 R020 成交量放大因子，并审查主要失效风险。</textarea>
+
+          <div class="prompt-footer">
+            <div class="examples" aria-label="示例任务">
+              <span>试试</span>
+              <button type="button" data-scenario="factor">寻找研究线索</button>
+              <button type="button" data-scenario="r020-risk">验证一个量化指标</button>
+              <button type="button" data-scenario="r020-risk">检查结论风险</button>
+              <button type="button" data-scenario="research-report">生成完整研究报告</button>
+            </div>
+            <button class="run-button" id="runButton" type="button">
+              <span class="run-label">运行任务</span>
+              <span class="run-arrow" aria-hidden="true">↗</span>
+            </button>
+          </div>
+          <div class="mode-note" id="modeNote">
+            演示示例使用明确标注的本地数据，不会发起真实研究。
+          </div>
+        </div>
+
+        <aside class="capability-card">
+          <div class="card-heading compact">
+            <div>
+              <span class="section-number">SYSTEM</span>
+              <h2>专家与能力</h2>
+            </div>
+          </div>
+          <div class="expert-list">
+            <div class="expert-row">
+              <span class="expert-icon research">R</span>
+              <div>
+                <strong>市场研究员</strong>
+                <small><code>research</code> · 市场数据与事实整理</small>
+              </div>
+              <span class="online">在线</span>
+            </div>
+            <div class="expert-row">
+              <span class="expert-icon quant">Q</span>
+              <div>
+                <strong>量化研究员</strong>
+                <small><code>quant</code> · 指标构思与确定性计算</small>
+              </div>
+              <span class="online">在线</span>
+            </div>
+            <div class="expert-row">
+              <span class="expert-icon risk">K</span>
+              <div>
+                <strong>风险审查员</strong>
+                <small><code>risk</code> · 假设、限制与失效审查</small>
+              </div>
+              <span class="online">在线</span>
+            </div>
+            <div class="expert-row">
+              <span class="expert-icon report">P</span>
+              <div>
+                <strong>报告整理员</strong>
+                <small><code>report</code> · 可追溯结果整合</small>
+              </div>
+              <span class="online">在线</span>
+            </div>
+          </div>
+          <details class="runtime-block">
+            <summary class="runtime-title">
+              <span>专业工具</span>
+              <span class="runtime-count">2 个可用</span>
+            </summary>
+            <p class="runtime-help">由量化研究员按任务动态选择，无需预先指定。</p>
+            <div class="skill-chip"><i></i> Factor Idea Generation</div>
+            <div class="skill-chip"><i></i> R020 Volume Expansion</div>
+          </details>
+          <div class="data-status">
+            <span>PandaData</span>
+            <strong id="pandaStatus">检测中</strong>
+          </div>
+        </aside>
+      </section>
+
+      <section class="results-section" id="resultsSection" aria-live="polite">
+        <div class="results-header">
+          <div>
+            <span class="section-number">02</span>
+            <h2>研究结论</h2>
+          </div>
+          <div class="result-meta">
+            <span id="resultMode">DEMO</span>
+            <span id="durationLabel">— ms</span>
+          </div>
+        </div>
+
+        <div class="view-mode-tabs" role="tablist" aria-label="结果查看方式">
+          <button
+            class="view-tab active"
+            id="plainTab"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="plainView"
+            data-view="plain"
+          >
+            看得懂版
+          </button>
+          <button
+            class="view-tab"
+            id="professionalTab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="professionalView"
+            data-view="professional"
+          >
+            专业证据
+          </button>
+        </div>
+
+        <div id="plainView" role="tabpanel" aria-labelledby="plainTab">
+          <article class="plain-summary-card" id="plainSummary">
+            <div class="plain-summary-label">
+              <span>一句话结论</span>
+              <span id="failureFlag" hidden>包含失败步骤</span>
+            </div>
+            <h3 id="plainHeadline">等待研究结果</h3>
+          </article>
+
+          <div class="plain-grid">
+            <article class="plain-card key-points-card">
+              <div class="plain-card-heading">
+                <span class="plain-card-number">01</span>
+                <h3>你需要知道的三件事</h3>
+              </div>
+              <ol class="plain-list numbered" id="keyPoints"></ol>
+            </article>
+
+            <article class="plain-card evidence-level-card">
+              <div class="plain-card-heading">
+                <span class="plain-card-number">02</span>
+                <h3>结论有多可靠</h3>
+              </div>
+              <div class="evidence-label" id="evidenceLabel">等待判断</div>
+              <p id="evidenceDescription"></p>
+              <ol class="research-progress" id="researchProgress"></ol>
+            </article>
+          </div>
+
+          <div class="plain-grid plain-grid-three">
+            <article class="plain-card missing-card">
+              <div class="plain-card-heading">
+                <span class="plain-card-number">03</span>
+                <h3>目前还缺什么证据</h3>
+              </div>
+              <ul class="plain-list" id="missingEvidence"></ul>
+            </article>
+            <article class="plain-card next-steps-card">
+              <div class="plain-card-heading">
+                <span class="plain-card-number">04</span>
+                <h3>下一步研究建议</h3>
+              </div>
+              <ul class="plain-list" id="nextSteps"></ul>
+            </article>
+            <article class="plain-card risks-card">
+              <div class="plain-card-heading">
+                <span class="plain-card-number">05</span>
+                <h3>主要风险</h3>
+              </div>
+              <ul class="plain-list" id="majorRisks"></ul>
+            </article>
+          </div>
+
+          <div class="result-panel human-timeline-panel">
+            <div class="panel-title">
+              <span>研究团队正在做什么</span>
+              <span id="eventCount">0 项进度</span>
+            </div>
+            <div class="timeline" id="timeline"></div>
+            <details class="technical-log">
+              <summary>查看完整运行日志</summary>
+              <div class="technical-event-log" id="plainTechnicalLog"></div>
+            </details>
+          </div>
+        </div>
+
+        <div id="professionalView" role="tabpanel" aria-labelledby="professionalTab" hidden>
+          <div class="result-grid">
+            <div class="result-panel plan-panel">
+              <div class="panel-title">
+                <span>Manager 动态任务图</span>
+                <span id="complexityBadge">—</span>
+              </div>
+              <div class="plan-goal" id="planGoal">等待任务</div>
+              <div class="selected-agents" id="selectedAgents"></div>
+              <div class="dag" id="dag"></div>
+            </div>
+            <div class="result-panel professional-summary-panel">
+              <div class="panel-title">
+                <span>执行摘要</span>
+                <span id="resultCount">0 RESULTS</span>
+              </div>
+              <dl class="technical-summary" id="technicalSummary"></dl>
+            </div>
+          </div>
+
+          <div class="result-panel expert-panel">
+            <div class="panel-title">
+              <span>专业证据与专家结果</span>
+              <span>原始字段</span>
+            </div>
+            <div class="expert-results" id="expertResults"></div>
+          </div>
+
+          <div class="answer-card">
+            <div class="answer-label">
+              <span class="manager-orb">M</span>
+              <div><strong>Manager Synthesis</strong><small>原始综合结论</small></div>
+            </div>
+            <div class="answer-content" id="finalAnswer"></div>
+          </div>
+
+          <div class="result-panel technical-events-panel">
+            <div class="panel-title">
+              <span>技术执行详情</span>
+              <span>完整事件字段</span>
+            </div>
+            <div class="technical-event-log" id="technicalEventLog"></div>
+          </div>
+
+          <details class="raw-response">
+            <summary>查看经安全过滤的结构化响应 JSON</summary>
+            <pre id="rawJson"></pre>
+          </details>
+        </div>
+
+        <div class="disclaimer persistent-disclaimer" id="disclaimer"></div>
+      </section>
+    </main>
+
+    <footer>
+      <span>AlphaOS v0.3</span>
+      <span>Dynamic experts. Explicit evidence. Research only.</span>
+    </footer>
+
+    <script src="/static/presentation/status-labels.js" defer></script>
+    <script src="/static/presentation/event-labels.js" defer></script>
+    <script src="/static/presentation/build-plain-language-result.js" defer></script>
+    <script src="/static/app.js?v=20260723-1" defer></script>
+  </body>
+</html>

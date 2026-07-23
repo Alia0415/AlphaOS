@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from backend.agents.router_agent import (
@@ -18,6 +21,7 @@ from backend.agents.manager_agent import ManagerAgent, ManagerAgentError
 from backend.core.contracts import (
     ExecutionEvent,
     ExecutionPlan,
+    ExpertResult,
     RESEARCH_DISCLAIMER,
     TaskExecutionResponse,
 )
@@ -29,6 +33,12 @@ from backend.services.pandadata_client import (
 
 
 app = FastAPI(title="AlphaOS API", version="0.3.0")
+FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
+app.mount(
+    "/static",
+    StaticFiles(directory=FRONTEND_DIR),
+    name="frontend-static",
+)
 pandadata = PandaDataClient()
 router = RouterAgent()
 manager = ManagerAgent()
@@ -85,6 +95,11 @@ class MarketDataResponse(BaseModel):
     data: Any
 
 
+@app.get("/", include_in_schema=False)
+async def frontend() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -129,6 +144,7 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
                 },
             )
         ]
+        results: dict[str, ExpertResult]
         if plan.needs_clarification:
             events.append(
                 ExecutionEvent(

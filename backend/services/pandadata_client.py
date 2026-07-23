@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 from threading import Lock
 from typing import Any
+
+from dotenv import load_dotenv
+
+ALPHAOS_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class PandaDataConfigurationError(RuntimeError):
@@ -14,6 +19,7 @@ class PandaDataClient:
     """Lazy, thread-safe adapter for the PandaData Python SDK."""
 
     def __init__(self) -> None:
+        load_dotenv(dotenv_path=ALPHAOS_ENV_FILE)
         self._sdk: Any | None = None
         self._authenticated_as: str | None = None
         self._lock = Lock()
