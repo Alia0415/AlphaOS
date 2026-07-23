@@ -87,6 +87,15 @@ def _dependency_evidence(
                     "source_step": step_id,
                     "source_agent": result.agent.value,
                     "fact": item,
+                    "upstream_assumptions": result.assumptions,
+                    "upstream_limitations": result.limitations,
+                    "validation_status": result.metadata.get(
+                        "validation_status",
+                        item.get("validation_status")
+                        if isinstance(item, dict)
+                        else None,
+                    ),
+                    "provenance": result.metadata.get("provenance", []),
                 }
             )
     return evidence
@@ -124,6 +133,8 @@ def _assess(
     max_drawdowns: list[float] = []
     volatilities: list[float] = []
     observation_counts: list[int] = []
+    factor_coverages: list[float] = []
+    unverified_factors: list[str] = []
     for cited in evidence:
         fact = cited.get("fact", {})
         if not isinstance(fact, dict):
@@ -134,6 +145,22 @@ def _assess(
             volatilities.append(float(fact["daily_volatility"]))
         if isinstance(fact.get("observation_count"), int):
             observation_counts.append(fact["observation_count"])
+        factor_data = fact.get("data", {})
+        if isinstance(factor_data, dict):
+            if isinstance(factor_data.get("coverage_ratio"), (int, float)):
+                factor_coverages.append(float(factor_data["coverage_ratio"]))
+            factor_id = factor_data.get("factor_id") or fact.get("skill_id")
+            validation_status = (
+                fact.get("validation_status")
+                or factor_data.get("validation_status")
+                or cited.get("validation_status")
+            )
+            if validation_status in {
+                "unverified",
+                "computed_not_validated",
+                "mixed_unvalidated",
+            }:
+                unverified_factors.append(str(factor_id or "quant factor"))
 
     if max_drawdowns:
         worst = min(max_drawdowns)
@@ -145,6 +172,17 @@ def _assess(
         risk_factors.append(
             f"最小样本仅 {min(observation_counts)} 个观测，统计稳定性有限。"
         )
+    if factor_coverages:
+        risk_factors.append(
+            f"上游因子计算的最低非空覆盖率为 {min(factor_coverages):.2%}。"
+        )
+    if unverified_factors:
+        risk_factors.append(
+            "上游结果明确标记为尚未验证有效性："
+            + "、".join(dict.fromkeys(unverified_factors))
+            + "。"
+        )
+        missing.append("缺少因子 IC、样本外和回测有效性证据。")
     if not evidence:
         risk_factors.extend(
             [

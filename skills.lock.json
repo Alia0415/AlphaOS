@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "generated_at": "2026-07-23T06:47:45.548803+00:00",
+  "runtime_home": ".runtime_skills",
+  "policy": "Only the fixed AlphaOS Quant Agent allowlist may be installed.",
+  "skills": {
+    "factor_idea_generation": {
+      "repository": "quantskills/skill-factor-idea-generation",
+      "commit_sha": "4fda44d27bc80efe60284da6b03bc56a2bf4e82f",
+      "skill_path": ".",
+      "license": "GPL-3.0-only",
+      "installed_at": "2026-07-23T06:47:45.548803+00:00",
+      "expected_entrypoint": "SKILL.md",
+      "entrypoint_sha256": "ee0c5a0ac90614d9a52d592027ffd55dbb657326c3b724b2e0266ff10c174530"
+    },
+    "r020_volume_expansion": {
+      "repository": "quantskills/skill-quant-factor-volume-stat-alpha",
+      "commit_sha": "b169f31106f748b8746c4c1028c162e95f7277f4",
+      "skill_path": "factors/R020-5d-z-scored-volume-expansion",
+      "license": "GPL-3.0-only",
+      "installed_at": "2026-07-23T06:47:45.548803+00:00",
+      "expected_entrypoint": "scripts/factor.py",
+      "entrypoint_sha256": "eba18ff5abbd27ec9cf79c846186cf4069b29e8280d0de0e9ecb9fc8e8fb5f17"
+    }
+  }
+}

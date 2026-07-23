@@ -49,11 +49,27 @@ DEFAULT_EXPERTS = (
     AgentDefinition(
         id=AgentId.QUANT,
         name="Quant Agent",
-        description="量化假设、指标计算、策略设计与可验证性分析",
-        enabled=False,
-        tools=(),
-        accepted_inputs=(),
-        capabilities=("quantitative_analysis", "strategy_design", "backtesting"),
+        description="负责因子假设生成、因子计算和量化验证准备",
+        enabled=True,
+        tools=(
+            "factor_idea_generation",
+            "r020_volume_expansion",
+            "pandadata_market_data",
+        ),
+        accepted_inputs=(
+            "symbols",
+            "start_date",
+            "end_date",
+            "fields",
+            "candidate_count",
+            "factor_id",
+            "horizon",
+        ),
+        capabilities=(
+            "factor_ideation",
+            "factor_computation",
+            "quantitative_research",
+        ),
     ),
     AgentDefinition(
         id=AgentId.RISK,

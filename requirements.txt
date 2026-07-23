@@ -1,5 +1,7 @@
 fastapi
+numpy
 openai
+pandas
 panda_data
 python-dotenv
 uvicorn

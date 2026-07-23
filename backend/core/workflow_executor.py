@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from backend.agents.quant_agent import QuantAgent
 from backend.agents.report_agent import ReportAgent
 from backend.agents.research_agent import ResearchAgent
 from backend.agents.risk_agent import RiskAgent
@@ -130,6 +131,19 @@ class WorkflowExecutor:
             for result in batch_results:
                 results[result.task_id] = result
                 pending.remove(result.task_id)
+                for internal_event in _safe_agent_events(result):
+                    events.append(
+                        _event(
+                            internal_event["type"],
+                            result.task_id,
+                            result.agent,
+                            _agent_event_message(
+                                internal_event["type"],
+                                internal_event["metadata"].get("skill_id"),
+                            ),
+                            internal_event["metadata"],
+                        )
+                    )
                 for call in result.tool_calls:
                     events.append(
                         _event(
@@ -190,6 +204,7 @@ class WorkflowExecutor:
 def _default_handlers() -> dict[AgentId, ExpertHandler]:
     return {
         AgentId.RESEARCH: ResearchAgent(),
+        AgentId.QUANT: QuantAgent(),
         AgentId.RISK: RiskAgent(),
         AgentId.REPORT: ReportAgent(),
     }
@@ -220,3 +235,52 @@ def _event(
         message=message,
         metadata=metadata or {},
     )
+
+
+_INTERNAL_EVENT_TYPES = {
+    "skill_plan_created",
+    "skill_started",
+    "skill_completed",
+    "skill_failed",
+}
+_SAFE_AGENT_EVENT_METADATA = {
+    "skill_id",
+    "status",
+    "selected_skill_count",
+    "skill_step_count",
+}
+
+
+def _safe_agent_events(result: ExpertResult) -> list[dict[str, Any]]:
+    """Surface generic expert-internal events without raw data or instructions."""
+
+    raw_events = result.metadata.get("agent_events", [])
+    if not isinstance(raw_events, list):
+        return []
+    safe: list[dict[str, Any]] = []
+    for item in raw_events:
+        if not isinstance(item, dict) or item.get("type") not in _INTERNAL_EVENT_TYPES:
+            continue
+        raw_metadata = item.get("metadata", {})
+        if not isinstance(raw_metadata, dict):
+            raw_metadata = {}
+        metadata = {
+            key: raw_metadata.get(key)
+            for key in _SAFE_AGENT_EVENT_METADATA
+            if key in raw_metadata
+        }
+        metadata.setdefault("skill_id", item.get("skill_id"))
+        safe.append({"type": item["type"], "metadata": metadata})
+    return safe
+
+
+def _agent_event_message(event_type: str, skill_id: Any) -> str:
+    if event_type == "skill_plan_created":
+        return "专家已创建内部 Skill Plan。"
+    label = str(skill_id or "skill")
+    messages = {
+        "skill_started": f"{label} 开始执行。",
+        "skill_completed": f"{label} 执行完成。",
+        "skill_failed": f"{label} 执行失败。",
+    }
+    return messages[event_type]

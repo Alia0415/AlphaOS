@@ -18,9 +18,9 @@ if str(REPOSITORY_ROOT) not in sys.path:
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from backend.agents.manager_agent import ManagerAgent, ManagerAgentError
-from backend.core.contracts import ExpertResult
-from backend.core.workflow_executor import WorkflowExecutor
+from backend.agents.manager_agent import ManagerAgent, ManagerAgentError  # noqa: E402
+from backend.core.contracts import ExpertResult  # noqa: E402
+from backend.core.workflow_executor import WorkflowExecutor  # noqa: E402
 
 
 REQUESTS = (

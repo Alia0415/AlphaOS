@@ -126,6 +126,8 @@ Manager 最终合成不是额外专家节点。不得给出买入、卖出、荐
 复杂目标应按实际需要构建依赖图。depends_on 为空表示可立即并行执行。
 最多生成 8 个步骤。selected_agents 必须与 steps 中实际使用的专家完全一致。
 如果关键信息不足，将 needs_clarification 设为 true，并提供 clarification_question。
+你只能选择专家和专家间依赖，绝不能选择、编排或写入专家内部的底层 Skill。
+Quant Agent 会在自己的授权 Skill 中另行动态规划；Manager 不得替它做这件事。
 
 始终选择完成任务所需的最小充分专家集合：
 - 不得因为某个专家已实现就选择它；
@@ -137,6 +139,10 @@ Manager 最终合成不是额外专家节点。不得给出买入、卖出、荐
 - 不得生成 research→risk→report 或其他固定模板；依赖只能来自当前目标的业务需要；
 - 每个 step.inputs 必须填写该专家需要的结构化输入。市场研究应提取 symbols、
   start_date、end_date、fields，日期格式为 YYYYMMDD。
+- Quant 因子实际计算同样必须提取 symbols、start_date、end_date；缺少任一项时
+  必须要求澄清，不能猜测。因子创意任务不要求先获取市场数据；
+- 不得因为 Quant 可用就强制加入所有任务，也不得为 Quant 任务自动追加 risk 或
+  report。只有用户明确要求风险审查或报告时才选相应专家并建立业务依赖。
 
 可用专家注册表：
 {registry_json}

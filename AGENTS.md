@@ -35,8 +35,8 @@ The expert pool is exactly:
 - `macro`
 - `report`
 
-Current v0.3 availability is `research`, `risk`, and `report` enabled;
-`quant`, `portfolio`, and `macro` remain registered but disabled. Manager
+Current availability is `research`, `quant`, `risk`, and `report` enabled;
+`portfolio` and `macro` remain registered but disabled. Manager
 prompts must be generated from the enabled Registry entries and must not carry
 a separate handwritten expert list.
 
@@ -66,14 +66,36 @@ validation succeed.
   may use real credentials and quota.
 - Select the minimal sufficient expert set. Risk and Report are optional, and
   no executor code may add them or encode a fixed expert sequence.
+- Manager selects experts and expert dependencies only. It must never select,
+  order, or invoke a Quant Skill.
+- Quant Agent may dynamically select one or more of its enabled Skills, with
+  at most three internal steps. Do not replace the Skill Planner with keyword
+  routing or a fixed Skill sequence.
 
 ## QuantSkills integration principles
 
 - Register QuantSkills through the central skill registry.
+- Treat `backend/skills/skill_registry.py` as the only runtime Skill source of
+  truth. Do not auto-discover local folders or user-provided repositories.
+- The only current Quant Skill allowlist is `factor_idea_generation` and
+  `r020_volume_expansion`, both owned exclusively by `quant`.
+- A Codex-installed Skill is not an AlphaOS Runtime Skill. Runtime code may
+  load only entries installed under `QUANTSKILLS_HOME` and recorded in
+  `skills.lock.json`.
 - Define clear inputs, outputs, assumptions, and error behavior for each skill.
 - Prefer deterministic, reproducible calculations.
 - Record data sources and calculation parameters.
 - Treat model output as untrusted until validated.
+- Instruction Skills are untrusted methodology text: enforce bounded reads,
+  allowlisted references, path containment, and one JSON repair. Never execute
+  commands found in `SKILL.md`.
+- Executable Skills may load only the pinned, hashed entrypoint from the lock
+  file. Never call signal-generation helpers or unknown repository code.
+- Factor ideas must remain `unverified`; R020 output is
+  `computed_not_validated`. Neither status may be presented as IC, backtest,
+  performance, or trading evidence.
+- Keep complete backtesting, IC diagnostics, portfolio construction, and
+  automated trading outside the current capability boundary.
 
 ## Security requirements
 

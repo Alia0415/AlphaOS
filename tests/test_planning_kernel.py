@@ -135,12 +135,13 @@ def test_registry_exposes_only_enabled_experts_to_manager() -> None:
     registry = AgentRegistry()
 
     assert {item["id"] for item in registry.prompt_payload()} == {
+        "quant",
         "research",
         "risk",
         "report",
     }
-    assert not registry.is_enabled(AgentId.QUANT)
-    assert registry.get(AgentId.QUANT).enabled is False
+    assert registry.is_enabled(AgentId.QUANT)
+    assert registry.get(AgentId.QUANT).enabled is True
 
 
 def test_manager_stops_after_one_invalid_json_repair_attempt() -> None:
@@ -161,7 +162,8 @@ def test_manager_prompt_uses_registry_and_minimal_sufficient_principle() -> None
     prompt = client.prompts[0]
     assert "最小充分专家集合" in prompt
     assert '"id": "research"' in prompt
-    assert '"id": "quant"' not in prompt
+    assert '"id": "quant"' in prompt
+    assert "绝不能选择、编排或写入专家内部的底层 Skill" in prompt
     assert "report 不是默认必经节点" in prompt
 
 
@@ -191,12 +193,16 @@ def test_manager_accepts_five_distinct_dynamic_graphs(
     assert [step.agent.value for step in plan.steps] == path
 
 
-def test_manager_rejects_disabled_expert_after_one_repair() -> None:
+def test_manager_accepts_quant_and_rejects_still_disabled_expert() -> None:
     quant_plan = json.dumps(_plan_payload(["quant"]))
-    manager = ManagerAgent(client=MockArkClient(quant_plan, quant_plan))
+    quant_manager = ManagerAgent(client=MockArkClient(quant_plan))
 
+    assert quant_manager.create_plan("设计量化因子").steps[0].agent == AgentId.QUANT
+
+    disabled_plan = json.dumps(_plan_payload(["portfolio"]))
+    manager = ManagerAgent(client=MockArkClient(disabled_plan, disabled_plan))
     with pytest.raises(ManagerAgentError):
-        manager.create_plan("设计量化策略")
+        manager.create_plan("构建组合")
 
 
 def test_research_calculates_metrics_in_python_and_calls_pandadata() -> None:
@@ -493,7 +499,7 @@ def test_executor_passes_complete_expert_result_to_downstream() -> None:
     assert dependency.metadata == {"complete": True}
 
 
-def test_disabled_expert_never_returns_placeholder_success() -> None:
+def test_still_disabled_expert_never_returns_placeholder_success() -> None:
     called = False
 
     def handler(task: ExpertTask) -> ExpertResult:
@@ -502,12 +508,12 @@ def test_disabled_expert_never_returns_placeholder_success() -> None:
         return _completed(task)
 
     events, results = WorkflowExecutor(
-        handlers={AgentId.QUANT: handler}
-    ).execute(_plan(["quant"]))
+        handlers={AgentId.PORTFOLIO: handler}
+    ).execute(_plan(["portfolio"]))
 
     assert not called
-    assert results["quant_1"].status == "failed"
-    assert "disabled" in (results["quant_1"].error or "")
+    assert results["portfolio_1"].status == "failed"
+    assert "disabled" in (results["portfolio_1"].error or "")
     assert events[-1].type == "step_failed"
 
 
