@@ -1,7 +1,16 @@
 .env
-**pycache**/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.runtime_skills/
 node_modules/
 dist/
 build/
+*.egg-info/
+outputs/
+logs/
 *.log
+.coverage
+htmlcov/
 
