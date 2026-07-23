@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
 ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 DEFAULT_ARK_MODEL = "ep-20260708162855-pcf9x"
+ALPHAOS_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class ArkClientError(RuntimeError):
@@ -19,7 +21,7 @@ class ArkClient:
     """Small adapter around the Volcano Ark OpenAI-compatible API."""
 
     def __init__(self) -> None:
-        load_dotenv()
+        load_dotenv(dotenv_path=ALPHAOS_ENV_FILE)
         api_key = os.getenv("ARK_API_KEY", "").strip()
         if not api_key:
             raise ArkClientError(
