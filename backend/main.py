@@ -8,6 +8,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
+from backend.agents.router_agent import (
+    RouteDecision,
+    RouterAgent,
+    RouterAgentError,
+)
 from backend.services.pandadata_client import (
     PandaDataClient,
     PandaDataConfigurationError,
@@ -16,6 +21,19 @@ from backend.services.pandadata_client import (
 
 app = FastAPI(title="AlphaOS API", version="0.1.0")
 pandadata = PandaDataClient()
+router = RouterAgent()
+
+
+class RouteRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str) -> str:
+        prompt = value.strip()
+        if not prompt:
+            raise ValueError("prompt 不能为空")
+        return prompt
 
 
 class MarketDataRequest(BaseModel):
@@ -64,6 +82,14 @@ async def health() -> dict[str, str]:
 @app.get("/api/pandadata/status")
 async def pandadata_status() -> dict[str, object]:
     return pandadata.status()
+
+
+@app.post("/api/route", response_model=RouteDecision)
+async def route_request(request: RouteRequest) -> RouteDecision:
+    try:
+        return await run_in_threadpool(router.route, request.prompt)
+    except RouterAgentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/market-data", response_model=MarketDataResponse)
