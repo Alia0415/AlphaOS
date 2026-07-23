@@ -135,6 +135,7 @@ def test_registry_exposes_only_enabled_experts_to_manager() -> None:
     registry = AgentRegistry()
 
     assert {item["id"] for item in registry.prompt_payload()} == {
+        "macro",
         "quant",
         "research",
         "risk",

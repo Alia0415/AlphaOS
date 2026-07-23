@@ -43,8 +43,8 @@ The expert pool is exactly:
 - `macro`
 - `report`
 
-Current availability is `research`, `quant`, `risk`, and `report` enabled;
-`portfolio` and `macro` remain registered but disabled. Manager
+Current availability is `research`, `quant`, `risk`, `macro`, and `report`
+enabled; `portfolio` remains registered but disabled. Manager
 prompts must be generated from the enabled Registry entries and must not carry
 a separate handwritten expert list.
 
@@ -79,6 +79,10 @@ validation succeed.
 - Quant Agent may dynamically select one or more of its enabled Skills, with
   at most three internal steps. Do not replace the Skill Planner with keyword
   routing or a fixed Skill sequence.
+- Macro Agent dynamically selects only reviewed PandaData macro categories and
+  catalog-returned indicators. It must not execute model-provided method names,
+  and it must not fall back to model-only macro claims when PandaData is
+  unavailable.
 
 ## QuantSkills integration principles
 

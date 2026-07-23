@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+from backend.agents.macro_agent import MacroAgent
 from backend.agents.quant_agent import QuantAgent
 from backend.agents.report_agent import ReportAgent
 from backend.agents.research_agent import ResearchAgent
@@ -206,6 +207,7 @@ def _default_handlers() -> dict[AgentId, ExpertHandler]:
         AgentId.RESEARCH: ResearchAgent(),
         AgentId.QUANT: QuantAgent(),
         AgentId.RISK: RiskAgent(),
+        AgentId.MACRO: MacroAgent(),
         AgentId.REPORT: ReportAgent(),
     }
 

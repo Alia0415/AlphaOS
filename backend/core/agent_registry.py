@@ -92,10 +92,16 @@ DEFAULT_EXPERTS = (
     AgentDefinition(
         id=AgentId.MACRO,
         name="Macro Agent",
-        description="宏观环境、政策、周期与跨资产背景分析",
-        enabled=False,
-        tools=(),
-        accepted_inputs=(),
+        description="基于 PandaData 分析宏观环境、政策、周期、利率与流动性",
+        enabled=True,
+        tools=("pandadata_macro_data",),
+        accepted_inputs=(
+            "industry",
+            "time_range",
+            "research_goal",
+            "start_date",
+            "end_date",
+        ),
         capabilities=("macro_analysis", "policy_analysis", "cycle_analysis"),
     ),
     AgentDefinition(
