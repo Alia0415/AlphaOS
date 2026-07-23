@@ -1078,6 +1078,16 @@ details.runtime-block[open] > summary {
   letter-spacing: 0;
 }
 
+.plain-summary-label #completionStatus,
+.plain-summary-label #confidenceBadge {
+  padding: 5px 8px;
+  border: 1px solid rgba(168, 255, 207, 0.2);
+  border-radius: 6px;
+  color: #bfe8d2;
+  background: rgba(168, 255, 207, 0.045);
+  letter-spacing: 0;
+}
+
 .plain-summary-card h3 {
   position: relative;
   z-index: 1;
@@ -1088,6 +1098,186 @@ details.runtime-block[open] > summary {
   font-weight: 520;
   letter-spacing: -0.035em;
   line-height: 1.45;
+}
+
+.plain-summary-card > p {
+  position: relative;
+  z-index: 1;
+  max-width: 880px;
+  margin: 16px 0 0;
+  color: #a9bbb2;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.aggregation-blocks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.aggregation-block {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.13);
+}
+
+.aggregation-block.importance-primary,
+.aggregation-block.type-report,
+.aggregation-block.type-comparison {
+  grid-column: 1 / -1;
+}
+
+.aggregation-block.type-failure_notice {
+  border-color: rgba(255, 135, 135, 0.25);
+}
+
+.aggregation-block.type-risk_list,
+.aggregation-block.type-limitations {
+  border-color: rgba(247, 203, 116, 0.18);
+}
+
+.aggregation-block-heading {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--line);
+}
+
+.aggregation-block-heading h3 {
+  margin: 0;
+  color: #e8f2ed;
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.aggregation-block-heading span {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.aggregation-description,
+.aggregation-note {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.finding-list,
+.failure-list,
+.factor-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 17px;
+}
+
+.finding-list p,
+.failure-list section,
+.factor-list section,
+.comparison-grid section {
+  margin: 0;
+  padding: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 9px;
+  color: #bdcbc4;
+  background: rgba(255, 255, 255, 0.018);
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.failure-list h4,
+.factor-list h4,
+.comparison-grid h4 {
+  margin: 0 0 7px;
+  color: #e4eee9;
+  font-size: 12px;
+}
+
+.failure-list p,
+.factor-list p,
+.comparison-grid p {
+  margin: 0;
+  color: #91a39a;
+}
+
+.metric-card-grid,
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-top: 17px;
+}
+
+.metric-card {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-height: 145px;
+  padding: 16px;
+  border: 1px solid rgba(168, 255, 207, 0.12);
+  border-radius: 9px;
+  background: rgba(168, 255, 207, 0.025);
+}
+
+.metric-card span {
+  color: #8ca097;
+  font-size: 10px;
+}
+
+.metric-card strong {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 550;
+}
+
+.metric-card p {
+  margin: 0;
+  color: #81938a;
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.aggregation-list {
+  display: grid;
+  gap: 11px;
+  margin: 17px 0 0;
+  padding-left: 19px;
+  color: #bdcbc4;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.aggregation-list li::marker {
+  color: #60756b;
+}
+
+.clarification-question {
+  margin: 18px 0 0;
+  color: #e8f2ed;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.report-content {
+  margin-top: 18px;
+  color: #bdcbc4;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.report-content h3 {
+  color: #edf5f1;
 }
 
 .plain-grid {
@@ -1423,8 +1613,15 @@ footer {
   .workspace,
   .result-grid,
   .plain-grid,
-  .plain-grid-three {
+  .plain-grid-three,
+  .aggregation-blocks {
     grid-template-columns: 1fr;
+  }
+
+  .aggregation-block.importance-primary,
+  .aggregation-block.type-report,
+  .aggregation-block.type-comparison {
+    grid-column: auto;
   }
 
   .capability-card {

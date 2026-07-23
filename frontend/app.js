@@ -43,7 +43,7 @@ const SCENARIOS = {
         event("skill_started", "quant_1", "quant", "factor_idea_generation 开始执行。", 164),
         event("skill_completed", "quant_1", "quant", "factor_idea_generation 执行完成。", 682),
         event("step_completed", "quant_1", "quant", "quant 步骤执行完成。", 704),
-        event("synthesis_started", null, null, "Manager Agent 开始综合实际执行结果。", 722),
+        event("synthesis_started", null, null, "Result Aggregator 开始整理实际执行结果。", 722),
         event("task_completed", null, null, "AlphaOS 任务处理完成。", 861),
       ],
       results: {
@@ -125,7 +125,7 @@ const SCENARIOS = {
         event("step_completed", "quant_1", "quant", "quant 步骤执行完成。", 837),
         event("step_started", "risk_1", "risk", "Risk Agent 开始执行任务。", 851),
         event("step_completed", "risk_1", "risk", "risk 步骤执行完成。", 1124),
-        event("synthesis_started", null, null, "Manager Agent 开始综合实际执行结果。", 1140),
+        event("synthesis_started", null, null, "Result Aggregator 开始整理实际执行结果。", 1140),
         event("task_completed", null, null, "AlphaOS 任务处理完成。", 1284),
       ],
       results: {
@@ -231,7 +231,7 @@ const SCENARIOS = {
         event("step_completed", "research_1", "research", "research 步骤执行完成。", 608),
         event("step_started", "report_1", "report", "Report Agent 开始执行任务。", 621),
         event("step_completed", "report_1", "report", "report 步骤执行完成。", 879),
-        event("synthesis_started", null, null, "Manager Agent 开始综合实际执行结果。", 895),
+        event("synthesis_started", null, null, "Result Aggregator 开始整理实际执行结果。", 895),
         event("task_completed", null, null, "AlphaOS 任务处理完成。", 1023),
       ],
       results: {
@@ -318,15 +318,12 @@ function cacheElements() {
     "plainView",
     "professionalView",
     "plainHeadline",
+    "plainExplanation",
     "plainSummary",
+    "completionStatus",
+    "confidenceBadge",
     "failureFlag",
-    "keyPoints",
-    "evidenceLabel",
-    "evidenceDescription",
-    "researchProgress",
-    "missingEvidence",
-    "nextSteps",
-    "majorRisks",
+    "contentBlocks",
     "selectedAgents",
     "technicalSummary",
   ].forEach((id) => {
@@ -480,7 +477,7 @@ function renderResponse(response, mode) {
   renderPlainResult(plainResult);
   renderTechnicalSummary(response, plainResult);
   elements.finalAnswer.innerHTML = renderSafeMarkdown(
-    response.final_answer || "任务未返回最终综合结论。"
+    `${plainResult.directAnswer.headline}\n\n${plainResult.directAnswer.explanation}`
   );
   elements.disclaimer.textContent = response.disclaimer || DISCLAIMER;
   elements.rawJson.textContent = JSON.stringify(safeForDisplay(response), null, 2);
@@ -527,7 +524,13 @@ function renderTimeline(events) {
     message.className = "event-message";
     message.textContent = translateEvent(item);
     const type = document.createElement("small");
-    type.textContent = item.agent ? agentLabel(item.agent) : "研究经理";
+    type.textContent = item.agent
+      ? agentLabel(item.agent)
+      : item.metadata?.component === "result_aggregator"
+        ? "结果整理器"
+        : item.type === "task_completed"
+          ? "AlphaOS"
+          : "研究经理";
     message.append(type);
     const time = document.createElement("time");
     time.textContent = eventTime(item, index);
@@ -558,7 +561,8 @@ function renderTechnicalLog(events, container) {
       item.step_id ? `step: ${item.step_id}` : null,
       item.metadata?.skill_id ? `skill: ${item.metadata.skill_id}` : null,
       item.metadata?.tool ? `tool: ${item.metadata.tool}` : null,
-    ].filter(Boolean).join(" · ") || "manager event";
+      item.metadata?.component ? `component: ${item.metadata.component}` : null,
+    ].filter(Boolean).join(" · ") || "system event";
     const original = document.createElement("small");
     original.textContent = item.message || "无原始事件消息";
     row.append(heading, fields, original);
@@ -669,65 +673,238 @@ function resultFacts(result) {
 }
 
 function renderPlainResult(result) {
-  elements.plainHeadline.textContent = result.headline;
+  elements.plainHeadline.textContent = result.directAnswer.headline;
+  elements.plainExplanation.textContent = result.directAnswer.explanation;
+  elements.completionStatus.textContent = completionLabel(result.completionStatus);
+  elements.confidenceBadge.textContent = confidenceLabel(
+    result.directAnswer.confidence
+  );
   elements.plainSummary.classList.toggle("has-failures", result.hasFailures);
   elements.failureFlag.hidden = !result.hasFailures;
-  renderTextList(elements.keyPoints, result.keyPoints, "本次没有可提炼的关键信息。");
-  elements.evidenceLabel.textContent = result.evidenceLevel.label;
-  elements.evidenceDescription.textContent = result.evidenceLevel.description;
-  renderProgress(result.progress);
-  renderTextList(
-    elements.missingEvidence,
-    result.missingEvidence,
-    "当前结构化结果没有声明额外证据缺口。"
-  );
-  renderTextList(
-    elements.nextSteps,
-    result.nextSteps,
-    "当前结果没有提供可确定生成的下一步研究行动。"
-  );
-  renderTextList(
-    elements.majorRisks,
-    result.majorRisks,
-    "当前结构化结果没有声明主要风险。"
-  );
+  renderContentBlocks(result.contentBlocks);
 }
 
-function renderTextList(container, values, emptyMessage) {
-  container.replaceChildren();
-  const items = Array.isArray(values) ? values : [];
-  if (!items.length) {
-    const item = document.createElement("li");
-    item.className = "muted-list-item";
-    item.textContent = emptyMessage;
-    container.append(item);
-    return;
-  }
-  items.forEach((value) => {
-    const item = document.createElement("li");
-    item.textContent = value;
-    container.append(item);
+const BLOCK_RENDERERS = {
+  finding_cards: renderFindingCards,
+  metric_cards: renderMetricCards,
+  comparison: renderComparison,
+  risk_list: renderListBlock,
+  factor_list: renderFactorList,
+  action_list: renderListBlock,
+  limitations: renderListBlock,
+  clarification: renderClarification,
+  failure_notice: renderFailureNotice,
+  narrative: renderFindingCards,
+  report: renderReportBlock,
+  data_scope: renderDataScope,
+};
+
+function renderContentBlocks(blocks) {
+  elements.contentBlocks.replaceChildren();
+  const visible = Array.isArray(blocks)
+    ? blocks.filter((block) => BLOCK_RENDERERS[block?.type])
+    : [];
+  visible.forEach((block) => {
+    const card = document.createElement("article");
+    card.className = `aggregation-block importance-${block.importance || "secondary"} type-${block.type}`;
+    const heading = document.createElement("div");
+    heading.className = "aggregation-block-heading";
+    const title = document.createElement("h3");
+    title.textContent = block.title || "结果";
+    const type = document.createElement("span");
+    type.textContent = blockTypeLabel(block.type);
+    heading.append(title, type);
+    card.append(heading);
+    if (block.description) {
+      const description = document.createElement("p");
+      description.className = "aggregation-description";
+      description.textContent = block.description;
+      card.append(description);
+    }
+    BLOCK_RENDERERS[block.type](card, block.data || {});
+    elements.contentBlocks.append(card);
   });
 }
 
-function renderProgress(progress) {
-  elements.researchProgress.replaceChildren();
-  progress.forEach((step) => {
-    const item = document.createElement("li");
-    item.className = step.completed ? "completed" : "pending";
-    const marker = document.createElement("span");
-    marker.textContent = step.completed ? "✓" : "—";
+function renderFindingCards(card, data) {
+  const list = document.createElement("div");
+  list.className = "finding-list";
+  (data.items || []).forEach((item) => {
+    const entry = document.createElement("p");
+    entry.textContent = typeof item === "string" ? item : item.text || item.summary || "";
+    if (entry.textContent) list.append(entry);
+  });
+  card.append(list);
+}
+
+function renderMetricCards(card, data) {
+  const grid = document.createElement("div");
+  grid.className = "metric-card-grid";
+  (data.metrics || []).forEach((metric) => {
+    const item = document.createElement("div");
+    item.className = "metric-card";
     const label = document.createElement("span");
-    label.textContent = step.label;
-    item.append(marker, label);
-    elements.researchProgress.append(item);
+    label.textContent = [metric.subject, metric.label].filter(Boolean).join(" · ");
+    const value = document.createElement("strong");
+    value.textContent = metric.display_value ?? String(metric.value ?? "—");
+    const explanation = document.createElement("p");
+    explanation.textContent = metric.explanation || "";
+    item.append(label, value, explanation);
+    grid.append(item);
   });
+  card.append(grid);
+}
+
+function renderComparison(card, data) {
+  const grid = document.createElement("div");
+  grid.className = "comparison-grid";
+  (data.entities || []).forEach((entity) => {
+    const item = document.createElement("section");
+    const title = document.createElement("h4");
+    title.textContent = entity.name || "对比项";
+    item.append(title);
+    (entity.metrics || []).forEach((metric) => {
+      const row = document.createElement("p");
+      row.textContent = `${metric.label || metric.metric || "指标"}：${
+        metric.display_value ?? metric.value ?? "—"
+      }`;
+      item.append(row);
+    });
+    grid.append(item);
+  });
+  card.append(grid);
+}
+
+function renderListBlock(card, data) {
+  const list = document.createElement("ul");
+  list.className = "aggregation-list";
+  (data.items || []).forEach((item) => {
+    const row = document.createElement("li");
+    row.textContent = typeof item === "string" ? item : item.text || item.message || "";
+    if (row.textContent) list.append(row);
+  });
+  card.append(list);
+}
+
+function renderFactorList(card, data) {
+  const shortlist = new Set(data.shortlist || []);
+  const list = document.createElement("div");
+  list.className = "factor-list";
+  (data.items || []).forEach((factor) => {
+    const item = document.createElement("section");
+    const title = document.createElement("h4");
+    const name = factor.name || factor.title || "研究想法";
+    title.textContent = shortlist.has(name) ? `优先验证 · ${name}` : name;
+    const text = document.createElement("p");
+    text.textContent =
+      factor.hypothesis || factor.description || factor.rationale || "";
+    item.append(title, text);
+    list.append(item);
+  });
+  if (!(data.items || []).length && shortlist.size) {
+    [...shortlist].forEach((name) => {
+      const item = document.createElement("section");
+      const title = document.createElement("h4");
+      title.textContent = `优先验证 · ${name}`;
+      item.append(title);
+      list.append(item);
+    });
+  }
+  const status = document.createElement("p");
+  status.className = "aggregation-note";
+  status.textContent = data.plain_status || "";
+  card.append(list, status);
+}
+
+function renderClarification(card, data) {
+  const question = document.createElement("p");
+  question.className = "clarification-question";
+  question.textContent = data.question || "请补充完成任务所需的信息。";
+  card.append(question);
+}
+
+function renderFailureNotice(card, data) {
+  const list = document.createElement("div");
+  list.className = "failure-list";
+  (data.items || []).forEach((failure) => {
+    const item = document.createElement("section");
+    const title = document.createElement("h4");
+    title.textContent = failure.stage || failure.step_id || "未完成阶段";
+    const message = document.createElement("p");
+    message.textContent = [failure.message, failure.reason].filter(Boolean).join(" ");
+    item.append(title, message);
+    list.append(item);
+  });
+  const guidance = document.createElement("p");
+  guidance.className = "aggregation-note";
+  guidance.textContent = data.guidance || "";
+  card.append(list, guidance);
+}
+
+function renderReportBlock(card, data) {
+  const report = document.createElement("div");
+  report.className = "report-content";
+  report.innerHTML = renderSafeMarkdown(data.content || "");
+  card.append(report);
+}
+
+function renderDataScope(card, data) {
+  const list = document.createElement("ul");
+  list.className = "aggregation-list";
+  (data.sources || []).forEach((source) => {
+    const item = document.createElement("li");
+    const symbols = Array.isArray(source.symbols) ? source.symbols.join("、") : "";
+    const dates =
+      source.start_date || source.end_date
+        ? `${source.start_date || "起始日期未知"} 至 ${source.end_date || "结束日期未知"}`
+        : "";
+    item.textContent = [source.name, symbols, dates].filter(Boolean).join(" · ");
+    if (item.textContent) list.append(item);
+  });
+  card.append(list);
+}
+
+function completionLabel(status) {
+  return {
+    completed: "已完成",
+    partially_completed: "部分完成",
+    needs_clarification: "需要补充信息",
+    failed: "未完成",
+  }[status] || status;
+}
+
+function confidenceLabel(confidence) {
+  return {
+    high: "较高可信度",
+    medium: "中等可信度",
+    low: "较低可信度",
+    not_applicable: "暂不适用",
+  }[confidence] || confidence;
+}
+
+function blockTypeLabel(type) {
+  return {
+    finding_cards: "发现",
+    metric_cards: "指标",
+    comparison: "对比",
+    risk_list: "风险",
+    factor_list: "研究想法",
+    action_list: "验证事项",
+    limitations: "限制",
+    clarification: "澄清",
+    failure_notice: "未完成",
+    narrative: "说明",
+    report: "报告",
+    data_scope: "数据范围",
+  }[type] || type;
 }
 
 function renderTechnicalSummary(response, plainResult) {
   const rows = [
     ["duration", `${formatNumber(response.duration_ms || 0)} ms`],
-    ["validation_status", plainResult.evidenceLevel.status],
+    ["completion_status", plainResult.completionStatus],
+    ["output_mode", plainResult.outputMode],
+    ["confidence", plainResult.directAnswer.confidence],
     ["selected_agents", String(plainResult.selectedAgents.length)],
     ["has_failures", String(plainResult.hasFailures)],
   ];
@@ -761,49 +938,32 @@ function renderError(message) {
   banner.textContent = `${userMessage} 系统没有切换或回退到演示数据。`;
   elements.expertResults.append(banner);
   elements.plainHeadline.textContent = userMessage;
+  elements.plainExplanation.textContent =
+    "当前请求没有生成可以支持结论的结构化证据。";
+  elements.completionStatus.textContent = "未完成";
+  elements.confidenceBadge.textContent = "暂不适用";
   elements.plainSummary.classList.add("has-failures");
   elements.failureFlag.hidden = false;
-  renderTextList(
-    elements.keyPoints,
-    modelUnavailable
-      ? [
-          "PandaData 已认证，可以获取真实行情。",
-          "本次任务在研究规划阶段停止，尚未发起行情查询。",
-          "当前没有生成研究结论。",
-        ]
-      : ["真实研究任务未能完成，不能按成功结果解释。"],
-    ""
-  );
-  elements.evidenceLabel.textContent = modelUnavailable
-    ? "数据源可用，分析尚未开始"
-    : "任务失败，暂时无法判断";
-  elements.evidenceDescription.textContent = modelUnavailable
-    ? "真实行情接口可用，但当前缺少用于理解问题和组织研究步骤的服务端分析能力。"
-    : "当前请求失败，没有生成可以支持结论的研究证据。";
-  renderProgress([
-    { label: "提出研究想法", completed: false },
-    { label: "完成数据计算", completed: false },
-    { label: "初步有效性验证", completed: false },
-    { label: "样本外验证", completed: false },
-    { label: "交易成本检验", completed: false },
+  renderContentBlocks([
+    {
+      id: "failures",
+      type: "failure_notice",
+      title: "未完成的部分",
+      importance: "primary",
+      data: {
+        items: [
+          {
+            stage: "研究服务",
+            message: userMessage,
+            reason: modelUnavailable
+              ? "缺少服务端研究模型配置。"
+              : "真实研究任务未能完成。",
+          },
+        ],
+        guidance: "系统没有切换到演示数据；服务恢复后可重新运行。",
+      },
+    },
   ]);
-  renderTextList(
-    elements.missingEvidence,
-    [
-      modelUnavailable
-        ? "缺少用于理解问题和编排研究步骤的服务端模型配置。"
-        : "本次任务没有生成足够的研究证据。",
-    ],
-    ""
-  );
-  renderTextList(
-    elements.nextSteps,
-    [],
-    modelUnavailable
-      ? "配置服务端研究模型后重新运行；用户页面无需填写任何密钥。"
-      : "研究服务恢复后重新运行任务，无需在页面填写任何密钥。"
-  );
-  renderTextList(elements.majorRisks, ["尚未生成任何可以验证的研究结论。"], "");
   elements.finalAnswer.textContent = modelUnavailable
     ? "真实行情数据已经接通，但研究分析尚未开始。"
     : "真实研究服务暂不可用，未生成研究结论。";
@@ -850,6 +1010,7 @@ function escapeHtml(value) {
 
 function event(type, stepId, agent, message, offsetMs) {
   const metadata = {};
+  if (type === "synthesis_started") metadata.component = "result_aggregator";
   if (type === "tool_called") {
     const tool = String(message).match(/调用了\s+([A-Za-z0-9_-]+)/)?.[1];
     if (tool) metadata.tool = tool;

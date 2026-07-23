@@ -37,6 +37,8 @@ def test_frontend_assets_are_served() -> None:
     assert "text/css" in styles.headers["content-type"]
     assert ".console-card" in styles.text
     assert "buildPlainLanguageResult" in script.text
+    assert "BLOCK_RENDERERS" in script.text
+    assert "renderContentBlocks" in script.text
 
 
 def test_presentation_modules_are_served() -> None:
@@ -50,6 +52,7 @@ def test_presentation_modules_are_served() -> None:
     assert "pandadata_market_data" in events.text
     assert adapter.status_code == 200
     assert "buildPlainLanguageResult" in adapter.text
+    assert "source.aggregation" in adapter.text
 
 
 def test_frontend_presentation_adapter() -> None:

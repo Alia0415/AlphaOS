@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from typing import Any
 
 from pydantic import ValidationError
 
 from backend.core.agent_registry import AgentRegistry
-from backend.core.contracts import ExecutionPlan, ExpertResult
+from backend.core.contracts import ExecutionPlan
 from backend.core.plan_validator import PlanValidationError, validate_execution_plan
 from backend.services.ark_client import ArkClient, ArkClientError
 
 
 class ManagerAgentError(RuntimeError):
-    """Raised when the Manager cannot produce or synthesize a valid response."""
+    """Raised when the Manager cannot produce a valid execution plan."""
 
 
 class ManagerAgent:
-    """Select experts, construct a task graph, and synthesize their results."""
+    """Select experts and construct a task graph; never aggregate results."""
 
     def __init__(
         self,
@@ -62,42 +61,6 @@ class ManagerAgent:
                 raise ManagerAgentError(
                     "Manager Agent 在一次修复后仍未返回有效的执行计划。"
                 ) from None
-
-    def synthesize(
-        self,
-        user_request: str,
-        plan: ExecutionPlan,
-        results: Mapping[str, ExpertResult] | list[ExpertResult],
-    ) -> str:
-        if plan.needs_clarification:
-            return plan.clarification_question or "请补充完成任务所需的关键信息。"
-
-        normalized_results = (
-            list(results.values()) if isinstance(results, Mapping) else results
-        )
-        payload = {
-            "user_request": user_request,
-            "plan": plan.model_dump(mode="json"),
-            "expert_results": [
-                result.model_dump(mode="json")
-                for result in normalized_results
-            ],
-        }
-        prompt = f"""
-你是 AlphaOS Manager Agent。你不是专家池成员。
-请综合下列已执行任务的结果，直接回答用户目标。
-清楚区分事实、判断、假设和未知信息；逐项说明失败、阻断和缺失信息，
-不得掩盖失败或伪造专家尚未提供的业务结论。
-Manager 最终合成不是额外专家节点。不得给出买入、卖出、荐股或收益承诺。
-用简洁、结构清晰的中文输出最终答案，不要返回 JSON。
-
-执行上下文：
-{json.dumps(payload, ensure_ascii=False)}
-""".strip()
-        try:
-            return self._get_client().chat(prompt).strip()
-        except ArkClientError as exc:
-            raise ManagerAgentError(str(exc)) from None
 
     def _parse_and_validate(self, raw_response: str) -> ExecutionPlan:
         payload = _extract_json(raw_response)

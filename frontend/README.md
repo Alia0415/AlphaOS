@@ -17,14 +17,16 @@ The console intentionally separates two execution paths:
   `ARK_API_KEY`; market-data tasks also require PandaData credentials.
 
 Both modes pass the same `TaskExecutionResponse` through the presentation
-adapter in `frontend/presentation/`. The default **看得懂版** derives its
-headline, key points, evidence level, missing evidence, research-only next
-steps, risks, and progress from structured expert results. It never treats a
-calculation as validation.
+adapter in `frontend/presentation/`. The default **看得懂版** reads
+`response.aggregation` first, displays `direct_answer`, and dispatches only the
+returned `content_blocks` through a block renderer map. It creates no fixed
+agent sections or empty placeholder cards. Legacy demo responses receive a
+small compatibility adaptation, but live research conclusions are generated
+only by the server-side Result Aggregator.
 
 The **专业证据** view preserves the Manager-created expert DAG, selection
 reasons, structured expert results, raw `validation_status`, skill and tool
-provenance, Manager synthesis, and complete execution-event fields. Potential
+provenance, Result Aggregator output, and complete execution-event fields. Potential
 credentials, internal paths, prompts, stack traces, and bulk raw market data
 are filtered from displayed JSON. Demo values are always labelled `DEMO DATA`
 and are never presented as live research evidence.

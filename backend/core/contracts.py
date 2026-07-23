@@ -123,6 +123,104 @@ class ExpertResult(BaseModel):
         return self.model_dump(mode="json")
 
 
+class DirectAnswer(BaseModel):
+    """The first, plain-language answer shown to a non-expert user."""
+
+    headline: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+    confidence: Literal["high", "medium", "low", "not_applicable"]
+    stance: Literal[
+        "positive",
+        "cautiously_positive",
+        "neutral",
+        "mixed",
+        "cautiously_negative",
+        "negative",
+        "insufficient_evidence",
+        "not_applicable",
+    ]
+
+
+class ResultBlock(BaseModel):
+    """One evidence-backed, dynamically selected presentation block."""
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    type: Literal[
+        "finding_cards",
+        "metric_cards",
+        "comparison",
+        "risk_list",
+        "factor_list",
+        "action_list",
+        "limitations",
+        "clarification",
+        "failure_notice",
+        "narrative",
+        "report",
+        "data_scope",
+    ]
+    title: str = Field(min_length=1)
+    description: str | None = None
+    importance: Literal["primary", "secondary", "supporting"]
+    source_steps: list[str] = Field(default_factory=list)
+    data: dict[str, Any]
+
+
+class AnalysisStep(BaseModel):
+    """A compact execution-path entry for the optional execution summary."""
+
+    step_id: str
+    agent: AgentId
+    objective: str
+    status: Literal["completed", "failed", "blocked", "not_executed"]
+
+
+class ExecutionSummary(BaseModel):
+    """What actually ran, kept separate from the user-facing answer."""
+
+    selected_agents: list[AgentId]
+    completed_steps: list[str]
+    failed_steps: list[str]
+    blocked_steps: list[str]
+    analysis_path: list[AnalysisStep]
+
+
+class TechnicalEvidence(BaseModel):
+    """Traceable expert contracts and validation boundaries."""
+
+    validation_statuses: dict[str, str]
+    conflicts: list[str]
+    missing_evidence: list[str]
+    source_results: dict[str, ExpertResult]
+
+
+class AggregationResult(BaseModel):
+    """Dynamic user-facing result composed only from actual execution evidence."""
+
+    user_goal: str = Field(min_length=1)
+    completion_status: Literal[
+        "completed",
+        "partially_completed",
+        "needs_clarification",
+        "failed",
+    ]
+    output_mode: Literal[
+        "direct_answer",
+        "data_analysis",
+        "idea_generation",
+        "risk_review",
+        "comparison",
+        "formal_report",
+        "clarification",
+        "failure",
+    ]
+    direct_answer: DirectAnswer
+    content_blocks: list[ResultBlock]
+    execution_summary: ExecutionSummary | None = None
+    technical_evidence: TechnicalEvidence | None = None
+    disclaimer: str = RESEARCH_DISCLAIMER
+
+
 class ExecutionEvent(BaseModel):
     """Ordered, frontend-ready orchestration event."""
 
@@ -155,6 +253,7 @@ class TaskExecutionResponse(BaseModel):
     plan: ExecutionPlan
     events: list[ExecutionEvent]
     results: dict[str, ExpertResult]
+    aggregation: AggregationResult
     final_answer: str
     duration_ms: int = Field(ge=0)
     disclaimer: str = RESEARCH_DISCLAIMER

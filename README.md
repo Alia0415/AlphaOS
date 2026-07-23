@@ -15,13 +15,21 @@ User
       → Quant Skill Planner
       → Allowlisted QuantSkills Runtime
   → optional Risk / Report (only when selected)
-  → Manager Synthesis
+  → Result Aggregator
+  → Dynamic User-facing Result
 ```
 
 Manager chooses experts and expert dependencies only. It cannot select or
 invoke a bottom-level Skill. Quant Agent sees only its own enabled Skills and
 dynamically selects the minimal sufficient set, with at most three internal
 steps and no fixed Skill sequence.
+
+`WorkflowExecutor` runs exactly the validated Manager DAG. The independent
+`ResultAggregator` inspects only actual `ExpertResult` contracts, determines
+completion status, answers the original goal, and emits evidence-driven content
+blocks. The frontend renders only returned blocks, so an uncalled expert never
+creates an empty or implied section. Complete expert results remain available
+under `aggregation.technical_evidence`.
 
 The enabled expert pool is:
 
@@ -94,12 +102,14 @@ without external credentials. **Live API mode** calls the existing
 that fetch market data also require PandaData credentials. The interactive API
 documentation remains available at `http://127.0.0.1:8000/docs`.
 
-The default result view explains what happened, what the evidence means, how
-reliable it is, what is missing, and what to validate next. The separate
-professional-evidence view retains the dynamic task graph, complete expert
-contracts, raw validation states, provenance, and technical execution events.
-Both views are deterministic presentations of the same response; no research
-evidence is generated in the browser.
+The default result view first shows `aggregation.direct_answer`, then renders
+only `aggregation.content_blocks`. Possible block types include metrics,
+comparisons, factor ideas, risks, limitations, reports, clarification, and
+failures, but none is mandatory. The separate professional-evidence view
+retains the dynamic task graph, complete expert contracts, raw validation
+states, provenance, and technical execution events. Both views are
+deterministic presentations of the same response; no research evidence is
+generated in the browser.
 
 The default runtime directory is `AlphaOS/.runtime_skills`, which is ignored
 by Git. Override it with an absolute path or a path relative to `AlphaOS`:
@@ -169,8 +179,21 @@ routes.
 
 ## Events and result contracts
 
+`POST /api/tasks` returns the original `plan`, `events`, and `results` plus an
+`aggregation` object with:
+
+- `user_goal`, `completion_status`, and `output_mode`
+- a plain-language `direct_answer`
+- zero or more evidence-driven `content_blocks`
+- an optional `execution_summary`
+- complete, collapsible `technical_evidence`
+
+The compatibility `final_answer` field remains available and is derived from
+`aggregation.direct_answer`; Manager no longer produces it.
+
 The outer lifecycle includes `plan_created`, expert step events, optional
-`synthesis_started`, and `task_completed`. Quant can additionally emit:
+legacy-named `synthesis_started` (now emitted by `ResultAggregator`), and
+`task_completed`. Quant can additionally emit:
 
 - `skill_plan_created`
 - `skill_started`

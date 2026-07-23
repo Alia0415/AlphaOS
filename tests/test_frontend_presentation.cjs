@@ -8,96 +8,95 @@ const {
   safeForDisplay,
 } = require("../frontend/presentation/build-plain-language-result.js");
 
-function responseWith(result, selectedAgents = [{ agent: result.agent, reason: "任务需要" }]) {
+function responseWithAggregation(overrides = {}) {
   return {
     plan: {
       goal: "测试研究任务",
-      selected_agents: selectedAgents,
-      steps: [{ id: result.task_id, agent: result.agent }],
+      selected_agents: [{ agent: "quant", reason: "任务需要" }],
+      steps: [{ id: "quant_1", agent: "quant" }],
       needs_clarification: false,
     },
-    events: [],
-    results: { [result.task_id]: result },
-    final_answer: "测试结果",
-    duration_ms: 12,
-    disclaimer: "仅用于研究，不构成投资建议。",
+    results: {},
+    aggregation: {
+      user_goal: "测试研究任务",
+      completion_status: "completed",
+      output_mode: "data_analysis",
+      direct_answer: {
+        headline: "已完成所需的数据计算",
+        explanation: "计算完成，但尚未证明方法能够稳定有效。",
+        confidence: "low",
+        stance: "insufficient_evidence",
+      },
+      content_blocks: [
+        {
+          id: "metrics",
+          type: "metric_cards",
+          title: "实际计算结果",
+          importance: "primary",
+          source_steps: ["quant_1"],
+          data: {
+            metrics: [
+              {
+                metric: "coverage_ratio",
+                label: "可正常计算的数据占比",
+                value: 0.9421,
+                display_value: "94.21%",
+                explanation: "表示有多少数据能够正常参与计算。",
+              },
+            ],
+          },
+        },
+      ],
+      execution_summary: {
+        selected_agents: ["quant"],
+        completed_steps: ["quant_1"],
+        failed_steps: [],
+        blocked_steps: [],
+        analysis_path: [],
+      },
+      technical_evidence: { source_results: {} },
+      disclaimer: "仅用于研究，不构成投资建议。",
+      ...overrides,
+    },
   };
 }
 
-function completedQuant(overrides = {}) {
-  return {
-    task_id: "quant_1",
-    agent: "quant",
-    status: "completed",
-    summary: "R020 已完成计算。",
-    evidence: [
+{
+  const plain = buildPlainLanguageResult(responseWithAggregation());
+  assert.equal(plain.directAnswer.headline, "已完成所需的数据计算");
+  assert.equal(plain.completionStatus, "completed");
+  assert.equal(plain.outputMode, "data_analysis");
+  assert.equal(plain.contentBlocks.length, 1);
+  assert.equal(plain.contentBlocks[0].type, "metric_cards");
+  assert.deepEqual(plain.selectedAgents, ["quant"]);
+  assert.equal(plain.hasFailures, false);
+}
+
+{
+  const response = responseWithAggregation({
+    completion_status: "partially_completed",
+    content_blocks: [
       {
-        validation_status: "computed_not_validated",
-        data: {
-          factor_id: "R020",
-          observation_count: 726,
-          coverage_ratio: 0.9421,
-        },
+        id: "findings",
+        type: "narrative",
+        title: "已完成的分析",
+        importance: "primary",
+        source_steps: ["macro_1"],
+        data: { items: [{ text: "宏观分析完成。" }] },
+      },
+      {
+        id: "empty-risk",
+        type: "risk_list",
+        title: "风险",
+        importance: "secondary",
+        source_steps: [],
+        data: { items: [] },
       },
     ],
-    assumptions: [],
-    risks: ["市场状态切换可能使结果失效。"],
-    limitations: ["尚未计算 IC。"],
-    recommendations: [],
-    tool_calls: [],
-    data_sources: [],
-    metadata: {
-      validation_status: "computed_not_validated",
-      actual_skills: ["r020_volume_expansion"],
-    },
-    ...overrides,
-  };
-}
-
-{
-  const plain = buildPlainLanguageResult(responseWith(completedQuant()));
-  assert.equal(plain.evidenceLevel.label, "已完成计算，尚未验证有效性");
-  assert.ok(plain.keyPoints.includes("94.2% 的数据可以正常参与计算。"));
-  assert.match(plain.headline, /只能作为研究线索/);
-  assert.equal(plain.progress[1].completed, true);
-  assert.equal(plain.progress[2].completed, false);
-  assert.deepEqual(plain.selectedAgents.map((item) => item.agent), ["quant"]);
-  assert.ok(!JSON.stringify(plain).includes("风险审查员开始"));
-  assert.ok(plain.nextSteps.some((item) => item.includes("未来 1 日和 5 日")));
-  assert.ok(!plain.nextSteps.some((item) => /买入|卖出|建仓/.test(item)));
-}
-
-{
-  const failed = completedQuant({
-    status: "failed",
-    summary: "专家步骤未成功执行。",
-    evidence: [],
-    limitations: ["数据获取失败。"],
-    metadata: {},
-    error: "Data unavailable.",
   });
-  const plain = buildPlainLanguageResult(responseWith(failed));
+  const plain = buildPlainLanguageResult(response);
   assert.equal(plain.hasFailures, true);
-  assert.equal(plain.evidenceLevel.status, "insufficient_data");
-  assert.match(plain.headline, /没有成功获得足够数据/);
-  assert.ok(plain.missingEvidence.some((item) => item.includes("未能成功完成")));
-}
-
-{
-  const blocked = completedQuant({
-    task_id: "risk_1",
-    agent: "risk",
-    status: "blocked",
-    summary: "依赖失败。",
-    evidence: [],
-    limitations: [],
-    metadata: {},
-    error: "Required dependency failed.",
-  });
-  const plain = buildPlainLanguageResult(responseWith(blocked));
-  assert.equal(plain.hasFailures, true);
-  assert.ok(plain.missingEvidence.some((item) => item.includes("被阻断")));
-  assert.equal(plain.progress[1].completed, false);
+  assert.deepEqual(plain.contentBlocks.map((block) => block.type), ["narrative"]);
 }
 
 {
@@ -109,7 +108,6 @@ function completedQuant(overrides = {}) {
     metadata: { tool: "pandadata_market_data" },
   };
   assert.equal(translateEvent(event), "正在获取指定区间的历史市场数据");
-  assert.equal(event.type, "tool_called");
   assert.equal(event.message, "quant 调用了 pandadata_market_data。");
 }
 

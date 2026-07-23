@@ -625,6 +625,7 @@ def test_tasks_api_returns_v03_shape_and_full_event_lifecycle() -> None:
         "plan",
         "events",
         "results",
+        "aggregation",
         "final_answer",
         "duration_ms",
         "disclaimer",
@@ -638,6 +639,12 @@ def test_tasks_api_returns_v03_shape_and_full_event_lifecycle() -> None:
         "task_completed",
     ]
     assert body["disclaimer"] == RESEARCH_DISCLAIMER
+    assert body["aggregation"]["completion_status"] == "completed"
+    assert (
+        body["aggregation"]["technical_evidence"]["source_results"]["research_1"]
+        == body["results"]["research_1"]
+    )
+    assert body["events"][-2]["metadata"]["component"] == "result_aggregator"
     assert main_module.app.openapi()["paths"]["/api/route"]["post"]["deprecated"]
 
 
@@ -668,4 +675,6 @@ def test_clarification_returns_events_without_expert_execution() -> None:
         "clarification_required",
         "task_completed",
     ]
-    assert body["final_answer"] == "请提供股票代码和日期范围。"
+    assert body["aggregation"]["completion_status"] == "needs_clarification"
+    assert body["aggregation"]["content_blocks"][0]["type"] == "clarification"
+    assert body["final_answer"].endswith("请提供股票代码和日期范围。")

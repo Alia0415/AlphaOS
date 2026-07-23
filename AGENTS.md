@@ -18,13 +18,21 @@ User
   → Dynamic Expert Selection
   → Task Graph Planning
   → Expert Pool Execution
-  → Manager Final Synthesis
+  → Result Aggregator
+  → User-facing Result
 ```
 
-The Manager Agent is the sole orchestrator. For every request it dynamically
-decides which experts are required, how many are required, which steps can run
-in parallel, which steps depend on earlier results, and whether clarification
-is required.
+The Manager Agent is the sole planner. For every request it dynamically decides
+which experts are required, how many are required, which steps can run in
+parallel, which steps depend on earlier results, and whether clarification is
+required. It does not synthesize the final result.
+
+`WorkflowExecutor` executes exactly the Manager-created DAG. Expert Agents
+perform their authorized analysis and choose only their own authorized Skills.
+`ResultAggregator` then answers the original user goal from actual
+`ExpertResult` evidence and emits dynamic presentation blocks. It cannot select
+experts or Skills, alter the DAG, append missing agents, or invent facts. The
+frontend renders this contract and does not generate research conclusions.
 
 The expert pool is exactly:
 

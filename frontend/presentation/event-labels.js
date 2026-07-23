@@ -13,7 +13,7 @@
     skill_failed: "专业计算未能完成",
     step_completed: "该研究步骤已完成",
     step_failed: "该研究步骤未能完成",
-    synthesis_started: "研究经理正在整理最终结论",
+    synthesis_started: "结果整理器正在根据实际证据生成回答",
     task_completed: "本次研究已完成",
   };
 

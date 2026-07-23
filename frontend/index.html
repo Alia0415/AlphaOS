@@ -46,7 +46,7 @@
         <div class="architecture" aria-label="AlphaOS 工作流程">
           <span>User</span><i>→</i><span class="accent">Manager</span><i>→</i>
           <span>Task Graph</span><i>→</i><span>Expert Pool</span><i>→</i>
-          <span>Synthesis</span>
+          <span>Result Aggregator</span>
         </div>
       </section>
 
@@ -190,55 +190,16 @@
         <div id="plainView" role="tabpanel" aria-labelledby="plainTab">
           <article class="plain-summary-card" id="plainSummary">
             <div class="plain-summary-label">
-              <span>一句话结论</span>
+              <span>最直接的回答</span>
+              <span id="completionStatus">等待结果</span>
+              <span id="confidenceBadge">—</span>
               <span id="failureFlag" hidden>包含失败步骤</span>
             </div>
             <h3 id="plainHeadline">等待研究结果</h3>
+            <p id="plainExplanation"></p>
           </article>
 
-          <div class="plain-grid">
-            <article class="plain-card key-points-card">
-              <div class="plain-card-heading">
-                <span class="plain-card-number">01</span>
-                <h3>你需要知道的三件事</h3>
-              </div>
-              <ol class="plain-list numbered" id="keyPoints"></ol>
-            </article>
-
-            <article class="plain-card evidence-level-card">
-              <div class="plain-card-heading">
-                <span class="plain-card-number">02</span>
-                <h3>结论有多可靠</h3>
-              </div>
-              <div class="evidence-label" id="evidenceLabel">等待判断</div>
-              <p id="evidenceDescription"></p>
-              <ol class="research-progress" id="researchProgress"></ol>
-            </article>
-          </div>
-
-          <div class="plain-grid plain-grid-three">
-            <article class="plain-card missing-card">
-              <div class="plain-card-heading">
-                <span class="plain-card-number">03</span>
-                <h3>目前还缺什么证据</h3>
-              </div>
-              <ul class="plain-list" id="missingEvidence"></ul>
-            </article>
-            <article class="plain-card next-steps-card">
-              <div class="plain-card-heading">
-                <span class="plain-card-number">04</span>
-                <h3>下一步研究建议</h3>
-              </div>
-              <ul class="plain-list" id="nextSteps"></ul>
-            </article>
-            <article class="plain-card risks-card">
-              <div class="plain-card-heading">
-                <span class="plain-card-number">05</span>
-                <h3>主要风险</h3>
-              </div>
-              <ul class="plain-list" id="majorRisks"></ul>
-            </article>
-          </div>
+          <div class="aggregation-blocks" id="contentBlocks"></div>
 
           <div class="result-panel human-timeline-panel">
             <div class="panel-title">
@@ -283,8 +244,8 @@
 
           <div class="answer-card">
             <div class="answer-label">
-              <span class="manager-orb">M</span>
-              <div><strong>Manager Synthesis</strong><small>原始综合结论</small></div>
+              <span class="manager-orb">A</span>
+              <div><strong>Result Aggregator</strong><small>结构化直接答案</small></div>
             </div>
             <div class="answer-content" id="finalAnswer"></div>
           </div>
@@ -315,6 +276,6 @@
     <script src="/static/presentation/status-labels.js" defer></script>
     <script src="/static/presentation/event-labels.js" defer></script>
     <script src="/static/presentation/build-plain-language-result.js" defer></script>
-    <script src="/static/app.js?v=20260723-1" defer></script>
+    <script src="/static/app.js?v=20260723-p01" defer></script>
   </body>
 </html>

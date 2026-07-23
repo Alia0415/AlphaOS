@@ -25,6 +25,7 @@ from backend.core.contracts import (
     RESEARCH_DISCLAIMER,
     TaskExecutionResponse,
 )
+from backend.core.result_aggregator import ResultAggregator
 from backend.core.workflow_executor import WorkflowExecutor
 from backend.services.pandadata_client import (
     PandaDataClient,
@@ -43,6 +44,7 @@ pandadata = PandaDataClient()
 router = RouterAgent()
 manager = ManagerAgent()
 workflow_executor = WorkflowExecutor()
+result_aggregator = ResultAggregator()
 
 
 class RouteRequest(BaseModel):
@@ -164,14 +166,19 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
             events.append(
                 ExecutionEvent(
                     type="synthesis_started",
-                    message="Manager Agent 开始综合实际执行结果。",
+                    message="Result Aggregator 开始整理实际执行结果。",
+                    metadata={"component": "result_aggregator"},
                 )
             )
-        final_answer = await run_in_threadpool(
-            manager.synthesize,
+        aggregation = await run_in_threadpool(
+            result_aggregator.aggregate,
             request.prompt,
             plan,
             results,
+        )
+        final_answer = (
+            f"{aggregation.direct_answer.headline}\n\n"
+            f"{aggregation.direct_answer.explanation}"
         )
         events.append(
             ExecutionEvent(
@@ -195,6 +202,7 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
         plan=plan,
         events=events,
         results=results,
+        aggregation=aggregation,
         final_answer=final_answer,
         duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
         disclaimer=RESEARCH_DISCLAIMER,

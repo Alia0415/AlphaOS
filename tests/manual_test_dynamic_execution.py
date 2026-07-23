@@ -93,7 +93,13 @@ def main() -> None:
                 )
             )
             print("Manager Final Answer:")
-            print(manager.synthesize(request, plan, results))
+            from backend.core.result_aggregator import ResultAggregator
+
+            print(
+                ResultAggregator()
+                .aggregate(request, plan, results)
+                .model_dump_json(indent=2)
+            )
         except ManagerAgentError as exc:
             print(f"Integration error: {exc}")
         except Exception:
