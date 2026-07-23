@@ -1,0 +1,2 @@
+"""QuantSkills registry."""
+
