@@ -442,6 +442,58 @@ textarea:focus {
   font-size: 11px;
 }
 
+.clarification-banner {
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid rgba(247, 203, 116, 0.35);
+  border-radius: 13px;
+  background: rgba(247, 203, 116, 0.08);
+}
+
+.clarification-banner-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.clarification-banner-heading span {
+  color: #f7cb74;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.clarification-banner-heading button {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+
+.clarification-banner-heading button:hover {
+  border-color: rgba(247, 203, 116, 0.4);
+  color: #f7cb74;
+}
+
+.clarification-banner-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.clarification-questions {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .card-heading.compact {
   margin-bottom: 18px;
 }

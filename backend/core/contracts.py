@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 RESEARCH_DISCLAIMER = "本结果仅用于研究与演示，不构成投资建议、荐股或收益承诺。"
+MAX_CLARIFICATION_ROUNDS = 5
 
 
 class AgentId(str, Enum):
@@ -48,6 +49,21 @@ class PlanStep(BaseModel):
         return values
 
 
+class ClarificationTurn(BaseModel):
+    """One completed round of Manager clarification: questions asked, one answer."""
+
+    questions: list[str] = Field(min_length=1, max_length=5)
+    answer: str = Field(min_length=1)
+
+    @field_validator("questions")
+    @classmethod
+    def questions_are_non_empty(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value for value in cleaned):
+            raise ValueError("clarification questions cannot be blank")
+        return cleaned
+
+
 class ExecutionPlan(BaseModel):
     """Validated task graph generated dynamically by the Manager Agent."""
 
@@ -57,16 +73,23 @@ class ExecutionPlan(BaseModel):
     selected_agents: list[AgentSelection] = Field(default_factory=list)
     steps: list[PlanStep] = Field(default_factory=list, max_length=8)
     needs_clarification: bool = False
-    clarification_question: str | None = None
+    clarification_questions: list[str] = Field(default_factory=list, max_length=5)
 
     @model_validator(mode="after")
     def clarification_is_actionable(self) -> "ExecutionPlan":
-        if self.needs_clarification and not (
-            self.clarification_question and self.clarification_question.strip()
-        ):
-            raise ValueError(
-                "clarification_question is required when needs_clarification is true"
-            )
+        if self.needs_clarification:
+            if not any(
+                question and question.strip()
+                for question in self.clarification_questions
+            ):
+                raise ValueError(
+                    "clarification_questions must contain at least one question "
+                    "when needs_clarification is true"
+                )
+            if self.steps or self.selected_agents:
+                raise ValueError(
+                    "a clarification plan cannot select agents or steps"
+                )
         return self
 
 

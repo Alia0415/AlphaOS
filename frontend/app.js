@@ -34,7 +34,7 @@ const SCENARIOS = {
           },
         ],
         needs_clarification: false,
-        clarification_question: null,
+        clarification_questions: [],
       },
       events: [
         event("plan_created", null, null, "Manager Agent 已创建并验证动态任务图。", 0),
@@ -113,7 +113,7 @@ const SCENARIOS = {
           },
         ],
         needs_clarification: false,
-        clarification_question: null,
+        clarification_questions: [],
       },
       events: [
         event("plan_created", null, null, "Manager Agent 已创建并验证动态任务图。", 0),
@@ -222,7 +222,7 @@ const SCENARIOS = {
           },
         ],
         needs_clarification: false,
-        clarification_question: null,
+        clarification_questions: [],
       },
       events: [
         event("plan_created", null, null, "Manager Agent 已创建并验证动态任务图。", 0),
@@ -275,13 +275,120 @@ const SCENARIOS = {
       disclaimer: DISCLAIMER,
     },
   },
+  clarification: {
+    prompt: "帮我看看这只股票怎么样",
+    rounds: [
+      {
+        plan: {
+          goal: "澄清具体研究目标",
+          intent: "clarification_needed",
+          complexity: "low",
+          selected_agents: [],
+          steps: [],
+          needs_clarification: true,
+          clarification_questions: [
+            "你想了解哪只股票？请提供具体代码，如 000001.SZ。",
+            "你希望分析哪个时间区间？",
+          ],
+        },
+        events: [
+          event("plan_created", null, null, "Manager Agent 已创建并验证动态任务图。", 0),
+          event(
+            "clarification_required",
+            null,
+            null,
+            "1. 你想了解哪只股票？请提供具体代码，如 000001.SZ。\n2. 你希望分析哪个时间区间？",
+            24,
+            {
+              round: 1,
+              max_rounds: 5,
+              questions: [
+                "你想了解哪只股票？请提供具体代码，如 000001.SZ。",
+                "你希望分析哪个时间区间？",
+              ],
+            }
+          ),
+          event("task_completed", null, null, "AlphaOS 任务处理完成。", 40),
+        ],
+        results: {},
+        final_answer:
+          "1. 你想了解哪只股票？请提供具体代码，如 000001.SZ。\n2. 你希望分析哪个时间区间？",
+        duration_ms: 40,
+        disclaimer: DISCLAIMER,
+      },
+      {
+        plan: {
+          goal: "分析 000001.SZ 在 2024 年的价格表现",
+          intent: "market_research",
+          complexity: "low",
+          selected_agents: [
+            { agent: "research", reason: "已获得具体标的和时间区间，需要市场数据分析" },
+          ],
+          steps: [
+            {
+              id: "research_1",
+              agent: "research",
+              objective: "计算 2024 年价格与成交量指标",
+              inputs: {
+                symbols: ["000001.SZ"],
+                start_date: "20240101",
+                end_date: "20241231",
+              },
+              depends_on: [],
+              expected_output: "结构化市场指标",
+            },
+          ],
+          needs_clarification: false,
+          clarification_questions: [],
+        },
+        events: [
+          event("plan_created", null, null, "Manager Agent 已创建并验证动态任务图。", 0),
+          event("step_started", "research_1", "research", "Research Agent 开始执行任务。", 22),
+          event("tool_called", "research_1", "research", "research 调用了 pandadata_market_data。", 340),
+          event("step_completed", "research_1", "research", "research 步骤执行完成。", 512),
+          event("synthesis_started", null, null, "Manager Agent 开始综合实际执行结果。", 528),
+          event("task_completed", null, null, "AlphaOS 任务处理完成。", 640),
+        ],
+        results: {
+          research_1: {
+            task_id: "research_1",
+            agent: "research",
+            status: "completed",
+            summary: "完成 000001.SZ 2024 年价格与成交量指标计算。",
+            evidence: [
+              {
+                type: "market_metrics",
+                symbol: "000001.SZ",
+                observation_count: 242,
+                period_return: -0.087,
+                maximum_drawdown: -0.223,
+                daily_volatility: 0.018,
+              },
+            ],
+            assumptions: ["收盘价和成交量口径在区间内一致。"],
+            risks: ["历史表现不能推导未来收益。"],
+            limitations: ["不包含公司基本面与估值信息。"],
+            metadata: { calculation_engine: "python" },
+          },
+        },
+        final_answer:
+          "### 核心发现\n在你补充标的（000001.SZ）和时间区间（2024 年）后，Manager 选择了 Research Agent 完成分析：区间收益率为 -8.70%，最大回撤为 -22.30%，日波动率约 1.80%。\n\n### 解读边界\n本结果只包含价量指标，不包含基本面或估值信息，历史表现不能推导未来收益。",
+        duration_ms: 640,
+        disclaimer: DISCLAIMER,
+      },
+    ],
+  },
 };
 
 const state = {
   mode: "demo",
   scenario: "r020-risk",
+  activeScenario: "r020-risk",
   running: false,
   view: "plain",
+  originalPrompt: "",
+  clarificationHistory: [],
+  pendingClarification: null,
 };
 
 const elements = {};
@@ -290,7 +397,7 @@ document.addEventListener("DOMContentLoaded", () => {
   cacheElements();
   bindEvents();
   checkServices();
-  renderResponse(SCENARIOS[state.scenario].response, "demo");
+  renderResponse(pickDemoResponse(SCENARIOS[state.scenario], 0), "demo");
 });
 
 function cacheElements() {
@@ -329,6 +436,10 @@ function cacheElements() {
     "majorRisks",
     "selectedAgents",
     "technicalSummary",
+    "clarificationBanner",
+    "clarificationRound",
+    "clarificationQuestions",
+    "clarificationReset",
   ].forEach((id) => {
     elements[id] = document.getElementById(id);
   });
@@ -350,6 +461,7 @@ function bindEvents() {
       runTask();
     }
   });
+  elements.clarificationReset.addEventListener("click", resetClarification);
 }
 
 function setView(view) {
@@ -390,6 +502,7 @@ async function checkServices() {
 
 function setMode(mode) {
   state.mode = mode === "live" ? "live" : "demo";
+  resetClarification();
   elements.taskPrompt.value =
     state.mode === "live" ? "" : SCENARIOS[state.scenario].prompt;
   document.querySelectorAll(".mode-button").forEach((button) => {
@@ -405,35 +518,55 @@ function selectScenario(scenario) {
   const selected = SCENARIOS[scenario];
   if (!selected) return;
   state.scenario = scenario;
+  state.activeScenario = scenario;
+  resetClarification();
   elements.taskPrompt.value = selected.prompt;
-  if (state.mode === "demo") renderResponse(selected.response, "demo");
+  if (state.mode === "demo") renderResponse(pickDemoResponse(selected, 0), "demo");
 }
 
 async function runTask() {
   if (state.running) return;
-  const prompt = elements.taskPrompt.value.trim();
-  if (!prompt) {
+  const inputValue = elements.taskPrompt.value.trim();
+  if (!inputValue) {
     elements.taskPrompt.focus();
     return;
+  }
+
+  if (state.pendingClarification) {
+    state.clarificationHistory = [
+      ...state.clarificationHistory,
+      { questions: state.pendingClarification.questions, answer: inputValue },
+    ];
+  } else {
+    state.originalPrompt = inputValue;
+    state.clarificationHistory = [];
   }
 
   setRunning(true);
   try {
     if (state.mode === "demo") {
       await wait(520);
-      const selected = findScenario(prompt);
-      renderResponse(selected.response, "demo");
+      const scenarioKey = state.pendingClarification
+        ? state.activeScenario
+        : findScenarioKey(inputValue);
+      state.activeScenario = scenarioKey;
+      const scenario = SCENARIOS[scenarioKey] || SCENARIOS["r020-risk"];
+      const response = pickDemoResponse(scenario, state.clarificationHistory.length);
+      applyResponse(response, "demo");
     } else {
       const response = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({
+          prompt: state.originalPrompt,
+          clarification_history: state.clarificationHistory,
+        }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(payload.detail || `请求失败（HTTP ${response.status}）`);
       }
-      renderResponse(payload, "live");
+      applyResponse(payload, "live");
     }
     elements.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
@@ -443,16 +576,78 @@ async function runTask() {
   }
 }
 
-function findScenario(prompt) {
-  const exact = Object.values(SCENARIOS).find((item) => item.prompt === prompt);
-  return exact || SCENARIOS[state.scenario] || SCENARIOS["r020-risk"];
+function findScenarioKey(prompt) {
+  const entry = Object.entries(SCENARIOS).find(([, item]) => item.prompt === prompt);
+  return entry ? entry[0] : state.scenario;
+}
+
+function pickDemoResponse(scenario, historyLength) {
+  if (Array.isArray(scenario.rounds)) {
+    const index = Math.min(historyLength, scenario.rounds.length - 1);
+    return scenario.rounds[index];
+  }
+  return scenario.response;
+}
+
+function applyResponse(response, mode) {
+  const plan = response.plan || {};
+  if (plan.needs_clarification) {
+    const clarificationEvent = (response.events || []).find(
+      (item) => item.type === "clarification_required"
+    );
+    const meta = clarificationEvent?.metadata || {};
+    state.pendingClarification = {
+      questions: plan.clarification_questions?.length
+        ? plan.clarification_questions
+        : meta.questions || [],
+      round: meta.round || state.clarificationHistory.length + 1,
+      maxRounds: meta.max_rounds || 5,
+    };
+  } else {
+    state.pendingClarification = null;
+  }
+  renderResponse(response, mode);
+  renderClarificationPrompt(state.pendingClarification);
+}
+
+function resetClarification() {
+  state.pendingClarification = null;
+  state.clarificationHistory = [];
+  state.originalPrompt = "";
+  renderClarificationPrompt(null);
+  if (state.mode === "demo") {
+    elements.taskPrompt.value = SCENARIOS[state.scenario]?.prompt || "";
+  }
+}
+
+function renderClarificationPrompt(pending) {
+  if (!pending) {
+    elements.clarificationBanner.hidden = true;
+    elements.clarificationQuestions.replaceChildren();
+    elements.taskPrompt.placeholder = "描述你希望 AlphaOS 完成的研究任务…";
+    return;
+  }
+  elements.clarificationBanner.hidden = false;
+  elements.clarificationRound.textContent = `第 ${pending.round}/${pending.maxRounds} 轮追问`;
+  elements.clarificationQuestions.replaceChildren();
+  pending.questions.forEach((question) => {
+    const item = document.createElement("li");
+    item.textContent = question;
+    elements.clarificationQuestions.append(item);
+  });
+  elements.taskPrompt.value = "";
+  elements.taskPrompt.placeholder = "请在这里依次回答上面的问题…";
+  elements.taskPrompt.focus();
 }
 
 function setRunning(running) {
   state.running = running;
   elements.runButton.disabled = running;
-  elements.runButton.querySelector(".run-label").textContent =
-    running ? "执行中…" : "运行任务";
+  elements.runButton.querySelector(".run-label").textContent = running
+    ? "执行中…"
+    : state.pendingClarification
+      ? "提交回答"
+      : "运行任务";
   elements.resultsSection.classList.toggle("loading", running);
 }
 
@@ -848,13 +1043,13 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function event(type, stepId, agent, message, offsetMs) {
-  const metadata = {};
-  if (type === "tool_called") {
+function event(type, stepId, agent, message, offsetMs, metadataOverride) {
+  const metadata = { ...metadataOverride };
+  if (type === "tool_called" && !metadata.tool) {
     const tool = String(message).match(/调用了\s+([A-Za-z0-9_-]+)/)?.[1];
     if (tool) metadata.tool = tool;
   }
-  if (String(type).startsWith("skill_")) {
+  if (String(type).startsWith("skill_") && !metadata.skill_id) {
     const skill = String(message).match(/^([A-Za-z0-9_-]+)\s/)?.[1];
     if (skill && skill !== "专家已创建内部") metadata.skill_id = skill;
   }

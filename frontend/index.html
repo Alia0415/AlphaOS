@@ -82,6 +82,7 @@
               <button type="button" data-scenario="r020-risk">验证一个量化指标</button>
               <button type="button" data-scenario="r020-risk">检查结论风险</button>
               <button type="button" data-scenario="research-report">生成完整研究报告</button>
+              <button type="button" data-scenario="clarification">模糊问题会被追问</button>
             </div>
             <button class="run-button" id="runButton" type="button">
               <span class="run-label">运行任务</span>
@@ -90,6 +91,16 @@
           </div>
           <div class="mode-note" id="modeNote">
             演示示例使用明确标注的本地数据，不会发起真实研究。
+          </div>
+          <div class="clarification-banner" id="clarificationBanner" hidden>
+            <div class="clarification-banner-heading">
+              <span id="clarificationRound">第 1/5 轮追问</span>
+              <button type="button" id="clarificationReset">重新开始</button>
+            </div>
+            <p class="clarification-banner-hint">
+              研究经理认为这个问题还不够具体，请在上方输入框依次回答：
+            </p>
+            <ol class="clarification-questions" id="clarificationQuestions"></ol>
           </div>
         </div>
 
@@ -315,6 +326,6 @@
     <script src="/static/presentation/status-labels.js" defer></script>
     <script src="/static/presentation/event-labels.js" defer></script>
     <script src="/static/presentation/build-plain-language-result.js" defer></script>
-    <script src="/static/app.js?v=20260723-1" defer></script>
+    <script src="/static/app.js?v=20260723-2" defer></script>
   </body>
 </html>

@@ -19,6 +19,8 @@ from backend.agents.router_agent import (
 )
 from backend.agents.manager_agent import ManagerAgent, ManagerAgentError
 from backend.core.contracts import (
+    MAX_CLARIFICATION_ROUNDS,
+    ClarificationTurn,
     ExecutionEvent,
     ExecutionPlan,
     ExpertResult,
@@ -47,6 +49,21 @@ workflow_executor = WorkflowExecutor()
 
 class RouteRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str) -> str:
+        prompt = value.strip()
+        if not prompt:
+            raise ValueError("prompt 不能为空")
+        return prompt
+
+
+class TaskRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20_000)
+    clarification_history: list[ClarificationTurn] = Field(
+        default_factory=list, max_length=MAX_CLARIFICATION_ROUNDS
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -119,18 +136,23 @@ async def route_request(request: RouteRequest) -> RouteDecision:
 
 
 @app.post("/api/plan", response_model=ExecutionPlan)
-async def plan_request(request: RouteRequest) -> ExecutionPlan:
+async def plan_request(request: TaskRequest) -> ExecutionPlan:
     try:
-        return await run_in_threadpool(manager.create_plan, request.prompt)
+        return await run_in_threadpool(
+            manager.create_plan, request.prompt, request.clarification_history
+        )
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/tasks", response_model=TaskExecutionResponse)
-async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
+async def execute_task(request: TaskRequest) -> TaskExecutionResponse:
     started_at = perf_counter()
+    round_number = len(request.clarification_history) + 1
     try:
-        plan = await run_in_threadpool(manager.create_plan, request.prompt)
+        plan = await run_in_threadpool(
+            manager.create_plan, request.prompt, request.clarification_history
+        )
         events = [
             ExecutionEvent(
                 type="plan_created",
@@ -149,8 +171,18 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
             events.append(
                 ExecutionEvent(
                     type="clarification_required",
-                    message=plan.clarification_question
+                    message="\n".join(
+                        f"{index}. {question}"
+                        for index, question in enumerate(
+                            plan.clarification_questions, start=1
+                        )
+                    )
                     or "任务需要补充关键信息。",
+                    metadata={
+                        "round": round_number,
+                        "max_rounds": MAX_CLARIFICATION_ROUNDS,
+                        "questions": plan.clarification_questions,
+                    },
                 )
             )
             results = {}

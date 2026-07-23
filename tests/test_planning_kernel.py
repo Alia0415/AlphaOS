@@ -15,6 +15,7 @@ from backend.agents.risk_agent import RiskAgent
 from backend.core.agent_registry import AgentRegistry
 from backend.core.contracts import (
     AgentId,
+    ClarificationTurn,
     ExecutionPlan,
     ExpertResult,
     ExpertTask,
@@ -97,7 +98,7 @@ def _plan_payload(path: list[str]) -> dict[str, Any]:
         ],
         "steps": steps,
         "needs_clarification": False,
-        "clarification_question": None,
+        "clarification_questions": [],
     }
 
 
@@ -649,7 +650,7 @@ def test_clarification_returns_events_without_expert_execution() -> None:
         "selected_agents": [],
         "steps": [],
         "needs_clarification": True,
-        "clarification_question": "请提供股票代码和日期范围。",
+        "clarification_questions": ["请提供股票代码和日期范围。"],
     }
     mock_manager = ManagerAgent(
         client=MockArkClient(json.dumps(clarification, ensure_ascii=False))
@@ -668,4 +669,104 @@ def test_clarification_returns_events_without_expert_execution() -> None:
         "clarification_required",
         "task_completed",
     ]
+    assert body["events"][1]["metadata"] == {
+        "round": 1,
+        "max_rounds": 5,
+        "questions": ["请提供股票代码和日期范围。"],
+    }
     assert body["final_answer"] == "请提供股票代码和日期范围。"
+
+
+def test_manager_prompt_includes_clarification_history_and_round_number() -> None:
+    history_payload = [
+        {"questions": ["请提供股票代码。"], "answer": "000001.SZ"},
+    ]
+    client = MockArkClient(json.dumps(_plan_payload(["research"])))
+
+    ManagerAgent(client=client).create_plan(
+        "帮我分析一下",
+        [ClarificationTurn.model_validate(turn) for turn in history_payload],
+    )
+
+    prompt = client.prompts[0]
+    assert "第 2 轮规划" in prompt
+    assert "000001.SZ" in prompt
+    assert "请提供股票代码。" in prompt
+
+
+def test_manager_allows_clarification_through_round_five() -> None:
+    history = [
+        ClarificationTurn(questions=[f"问题 {i}"], answer=f"答案 {i}")
+        for i in range(4)
+    ]
+    clarification = {
+        "goal": "分析股票",
+        "intent": "信息不足",
+        "complexity": "low",
+        "selected_agents": [],
+        "steps": [],
+        "needs_clarification": True,
+        "clarification_questions": ["还需要哪个时间区间？"],
+    }
+    manager = ManagerAgent(
+        client=MockArkClient(json.dumps(clarification, ensure_ascii=False))
+    )
+
+    plan = manager.create_plan("帮我分析一下", history)
+
+    assert plan.needs_clarification is True
+
+
+def test_manager_forbids_clarification_past_round_five() -> None:
+    history = [
+        ClarificationTurn(questions=[f"问题 {i}"], answer=f"答案 {i}")
+        for i in range(5)
+    ]
+    clarification = {
+        "goal": "分析股票",
+        "intent": "信息不足",
+        "complexity": "low",
+        "selected_agents": [],
+        "steps": [],
+        "needs_clarification": True,
+        "clarification_questions": ["还需要哪个时间区间？"],
+    }
+    manager = ManagerAgent(
+        client=MockArkClient(
+            json.dumps(clarification, ensure_ascii=False),
+            json.dumps(clarification, ensure_ascii=False),
+        )
+    )
+
+    with pytest.raises(ManagerAgentError):
+        manager.create_plan("帮我分析一下", history)
+
+
+def test_execution_plan_rejects_clarification_without_questions() -> None:
+    with pytest.raises(Exception):
+        ExecutionPlan.model_validate(
+            {
+                "goal": "g",
+                "intent": "i",
+                "complexity": "low",
+                "selected_agents": [],
+                "steps": [],
+                "needs_clarification": True,
+                "clarification_questions": [],
+            }
+        )
+
+
+def test_execution_plan_rejects_clarification_with_steps() -> None:
+    with pytest.raises(Exception):
+        ExecutionPlan.model_validate(
+            {
+                "goal": "g",
+                "intent": "i",
+                "complexity": "low",
+                "selected_agents": [{"agent": "research", "reason": "需要"}],
+                "steps": [_step("research_1", "research")],
+                "needs_clarification": True,
+                "clarification_questions": ["问题？"],
+            }
+        )
