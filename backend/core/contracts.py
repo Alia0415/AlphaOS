@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+RESEARCH_DISCLAIMER = "本结果仅用于研究与演示，不构成投资建议、荐股或收益承诺。"
 
 
 class AgentId(str, Enum):
-    """Stable identifiers for experts available to the Manager Agent."""
+    """Stable identifiers for experts in the complete expert pool."""
 
     RESEARCH = "research"
     QUANT = "quant"
@@ -32,6 +36,7 @@ class PlanStep(BaseModel):
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     agent: AgentId
     objective: str = Field(min_length=1)
+    inputs: dict[str, Any] = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list, max_length=8)
     expected_output: str = Field(min_length=1)
 
@@ -54,41 +59,98 @@ class ExecutionPlan(BaseModel):
     needs_clarification: bool = False
     clarification_question: str | None = None
 
+    @model_validator(mode="after")
+    def clarification_is_actionable(self) -> "ExecutionPlan":
+        if self.needs_clarification and not (
+            self.clarification_question and self.clarification_question.strip()
+        ):
+            raise ValueError(
+                "clarification_question is required when needs_clarification is true"
+            )
+        return self
+
 
 class ExpertTask(BaseModel):
-    """Task packet sent by the workflow executor to one expert."""
+    """Uniform task packet sent by the workflow executor to one expert."""
 
-    step_id: str
+    task_id: str = Field(min_length=1)
     agent: AgentId
-    objective: str
-    expected_output: str
-    dependency_results: dict[str, Any] = Field(default_factory=dict)
+    objective: str = Field(min_length=1)
+    original_user_request: str = Field(min_length=1)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    dependency_results: dict[str, "ExpertResult"] = Field(default_factory=dict)
+
+    @property
+    def step_id(self) -> str:
+        """Backward-compatible in-process name for older handlers."""
+
+        return self.task_id
 
 
 class ExpertResult(BaseModel):
-    """Structured result returned by an expert execution."""
+    """Uniform, validated result returned by every expert."""
 
-    step_id: str
+    task_id: str = Field(min_length=1)
     agent: AgentId
     status: Literal["completed", "failed", "blocked"]
-    output: Any = None
+    summary: str = ""
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    data_sources: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+
+    @model_validator(mode="after")
+    def failure_has_an_error(self) -> "ExpertResult":
+        if self.status in {"failed", "blocked"} and not self.error:
+            raise ValueError("failed and blocked expert results require an error")
+        return self
+
+    @property
+    def step_id(self) -> str:
+        """Backward-compatible in-process name for event ordering."""
+
+        return self.task_id
+
+    @property
+    def output(self) -> dict[str, Any]:
+        """Expose the complete structured result, never a flattened text blob."""
+
+        return self.model_dump(mode="json")
 
 
 class ExecutionEvent(BaseModel):
-    """Ordered status transition emitted while executing a task graph."""
+    """Ordered, frontend-ready orchestration event."""
 
-    sequence: int = Field(ge=1)
-    step_id: str
-    agent: AgentId
-    status: Literal["started", "completed", "failed", "blocked"]
+    type: Literal[
+        "plan_created",
+        "clarification_required",
+        "step_started",
+        "tool_called",
+        "step_completed",
+        "step_failed",
+        "synthesis_started",
+        "task_completed",
+    ]
+    step_id: str | None = None
+    agent: AgentId | None = None
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     message: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskExecutionResponse(BaseModel):
     """Complete response returned by ``POST /api/tasks``."""
 
     plan: ExecutionPlan
-    execution_events: list[ExecutionEvent]
-    expert_results: list[ExpertResult]
+    events: list[ExecutionEvent]
+    results: dict[str, ExpertResult]
     final_answer: str
+    duration_ms: int = Field(ge=0)
+    disclaimer: str = RESEARCH_DISCLAIMER

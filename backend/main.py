@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -14,7 +15,12 @@ from backend.agents.router_agent import (
     RouterAgentError,
 )
 from backend.agents.manager_agent import ManagerAgent, ManagerAgentError
-from backend.core.contracts import ExecutionPlan, TaskExecutionResponse
+from backend.core.contracts import (
+    ExecutionEvent,
+    ExecutionPlan,
+    RESEARCH_DISCLAIMER,
+    TaskExecutionResponse,
+)
 from backend.core.workflow_executor import WorkflowExecutor
 from backend.services.pandadata_client import (
     PandaDataClient,
@@ -22,7 +28,7 @@ from backend.services.pandadata_client import (
 )
 
 
-app = FastAPI(title="AlphaOS API", version="0.2.0")
+app = FastAPI(title="AlphaOS API", version="0.3.0")
 pandadata = PandaDataClient()
 router = RouterAgent()
 manager = ManagerAgent()
@@ -107,22 +113,75 @@ async def plan_request(request: RouteRequest) -> ExecutionPlan:
 
 @app.post("/api/tasks", response_model=TaskExecutionResponse)
 async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
+    started_at = perf_counter()
     try:
         plan = await run_in_threadpool(manager.create_plan, request.prompt)
-        events, results = await run_in_threadpool(workflow_executor.execute, plan)
+        events = [
+            ExecutionEvent(
+                type="plan_created",
+                message="Manager Agent 已创建并验证动态任务图。",
+                metadata={
+                    "step_count": len(plan.steps),
+                    "selected_agents": [
+                        selection.agent.value
+                        for selection in plan.selected_agents
+                    ],
+                },
+            )
+        ]
+        if plan.needs_clarification:
+            events.append(
+                ExecutionEvent(
+                    type="clarification_required",
+                    message=plan.clarification_question
+                    or "任务需要补充关键信息。",
+                )
+            )
+            results = {}
+        else:
+            execution_events, results = await run_in_threadpool(
+                workflow_executor.execute,
+                plan,
+                request.prompt,
+            )
+            events.extend(execution_events)
+            events.append(
+                ExecutionEvent(
+                    type="synthesis_started",
+                    message="Manager Agent 开始综合实际执行结果。",
+                )
+            )
         final_answer = await run_in_threadpool(
             manager.synthesize,
             request.prompt,
             plan,
             results,
         )
+        events.append(
+            ExecutionEvent(
+                type="task_completed",
+                message="AlphaOS 任务处理完成。",
+                metadata={
+                    "completed_steps": sum(
+                        result.status == "completed"
+                        for result in results.values()
+                    ),
+                    "failed_steps": sum(
+                        result.status in {"failed", "blocked"}
+                        for result in results.values()
+                    ),
+                },
+            )
+        )
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return TaskExecutionResponse(
         plan=plan,
-        execution_events=events,
-        expert_results=results,
+        events=events,
+        results=results,
         final_answer=final_answer,
+        duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+        disclaimer=RESEARCH_DISCLAIMER,
     )
 
 

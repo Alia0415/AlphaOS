@@ -23,10 +23,10 @@ def validate_execution_plan(
     if len(selected) != len(set(selected)):
         raise PlanValidationError("selected_agents contains duplicate agents")
 
-    unknown_selected = set(selected) - registry.ids()
+    unknown_selected = set(selected) - registry.ids(enabled_only=True)
     if unknown_selected:
         raise PlanValidationError(
-            f"Unknown selected agents: {_format_agents(unknown_selected)}"
+            f"Unknown or disabled selected agents: {_format_agents(unknown_selected)}"
         )
 
     step_ids = [step.id for step in plan.steps]
@@ -37,8 +37,10 @@ def validate_execution_plan(
     used_agents: set[AgentId] = set()
     dependencies: dict[str, list[str]] = {}
     for step in plan.steps:
-        if not registry.contains(step.agent):
-            raise PlanValidationError(f"Unknown step agent: {step.agent.value}")
+        if not registry.contains(step.agent, enabled_only=True):
+            raise PlanValidationError(
+                f"Unknown or disabled step agent: {step.agent.value}"
+            )
         used_agents.add(step.agent)
         dependencies[step.id] = step.depends_on
         unknown_dependencies = set(step.depends_on) - known_step_ids

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import ValidationError
@@ -66,23 +67,28 @@ class ManagerAgent:
         self,
         user_request: str,
         plan: ExecutionPlan,
-        results: list[ExpertResult],
+        results: Mapping[str, ExpertResult] | list[ExpertResult],
     ) -> str:
         if plan.needs_clarification:
             return plan.clarification_question or "请补充完成任务所需的关键信息。"
 
+        normalized_results = (
+            list(results.values()) if isinstance(results, Mapping) else results
+        )
         payload = {
             "user_request": user_request,
             "plan": plan.model_dump(mode="json"),
             "expert_results": [
                 result.model_dump(mode="json")
-                for result in results
+                for result in normalized_results
             ],
         }
         prompt = f"""
 你是 AlphaOS Manager Agent。你不是专家池成员。
 请综合下列已执行任务的结果，直接回答用户目标。
-清楚区分事实、假设和占位结果；不得伪造专家尚未提供的业务结论。
+清楚区分事实、判断、假设和未知信息；逐项说明失败、阻断和缺失信息，
+不得掩盖失败或伪造专家尚未提供的业务结论。
+Manager 最终合成不是额外专家节点。不得给出买入、卖出、荐股或收益承诺。
 用简洁、结构清晰的中文输出最终答案，不要返回 JSON。
 
 执行上下文：
@@ -121,6 +127,17 @@ class ManagerAgent:
 最多生成 8 个步骤。selected_agents 必须与 steps 中实际使用的专家完全一致。
 如果关键信息不足，将 needs_clarification 设为 true，并提供 clarification_question。
 
+始终选择完成任务所需的最小充分专家集合：
+- 不得因为某个专家已实现就选择它；
+- 价格/市场表现分析通常只需要 research，不得自动追加 risk 或 report；
+- 独立策略风险审查可以只使用 risk，不得强制先调用 research；
+- 只有用户明确要求报告、摘要、备忘录、正式输出，或复杂任务确需整合多个专家时，
+  才选择 report；
+- report 不是默认必经节点，risk 也不是默认必经节点；
+- 不得生成 research→risk→report 或其他固定模板；依赖只能来自当前目标的业务需要；
+- 每个 step.inputs 必须填写该专家需要的结构化输入。市场研究应提取 symbols、
+  start_date、end_date、fields，日期格式为 YYYYMMDD。
+
 可用专家注册表：
 {registry_json}
 
@@ -141,6 +158,10 @@ class ManagerAgent:
             ExecutionPlan.model_json_schema(),
             ensure_ascii=False,
         )
+        registry_json = json.dumps(
+            self.registry.prompt_payload(),
+            ensure_ascii=False,
+        )
         return f"""
 你上一次为 AlphaOS 生成的计划无效。仅进行这一次修复。
 保持用户目标不变，修正 JSON 语法、字段类型和任务图约束。
@@ -157,6 +178,9 @@ class ManagerAgent:
 
 目标 JSON Schema：
 {schema_json}
+
+当前唯一可用的专家注册表（不得使用列表外或 enabled=false 的专家）：
+{registry_json}
 """.strip()
 
     def _get_client(self) -> ArkClient:

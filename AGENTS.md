@@ -4,6 +4,10 @@
 
 Build an autonomous multi-agent AI quant research organization in which specialized financial agents collaborate on research tasks.
 
+AlphaOS is a dynamic AI organization, not a fixed Agent pipeline. The task
+graph generated for the current user request is the sole source of execution
+truth.
+
 ## Locked product architecture
 
 AlphaOS uses this architecture:
@@ -31,13 +35,18 @@ The expert pool is exactly:
 - `macro`
 - `report`
 
+Current v0.3 availability is `research`, `risk`, and `report` enabled;
+`quant`, `portfolio`, and `macro` remain registered but disabled. Manager
+prompts must be generated from the enabled Registry entries and must not carry
+a separate handwritten expert list.
+
 The Manager is not an expert and must never appear in `selected_agents` or as a
 task-graph step. Do not implement fixed workflows or keyword-based A→B→C
 routing. A plan may use one expert when the task genuinely needs only one, but
 the system must not reduce every request to a single primary agent.
 
 The legacy `/api/route` endpoint is temporarily retained only for compatibility
-and is deprecated. It is not the AlphaOS v0.2 orchestration path.
+and is deprecated. It is not the AlphaOS v0.3 orchestration path.
 
 Agents communicate through explicit Pydantic task and result contracts. Treat
 all model-generated plans as untrusted until both structural and graph
@@ -53,6 +62,10 @@ validation succeed.
 - Limit model-output repair to one controlled attempt.
 - Keep task graphs at eight steps or fewer and reject cycles or unknown agents.
 - Mock ArkClient in automated tests; tests must never consume model API quota.
+- Mock PandaData in automated tests; only the explicit manual integration script
+  may use real credentials and quota.
+- Select the minimal sufficient expert set. Risk and Report are optional, and
+  no executor code may add them or encode a fixed expert sequence.
 
 ## QuantSkills integration principles
 

@@ -1,10 +1,15 @@
-"""Dependency-aware execution of Manager-generated task graphs."""
+"""Pure task-graph execution for Manager-generated AlphaOS plans."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
+from backend.agents.report_agent import ReportAgent
+from backend.agents.research_agent import ResearchAgent
+from backend.agents.risk_agent import RiskAgent
+from backend.core.agent_registry import AgentRegistry
 from backend.core.contracts import (
     AgentId,
     ExecutionEvent,
@@ -17,25 +22,36 @@ ExpertHandler = Callable[[ExpertTask], ExpertResult]
 
 
 class WorkflowExecutor:
-    """Execute dependency-ready steps in parallel batches."""
+    """Execute exactly the nodes and edges supplied by an arbitrary valid DAG."""
 
     def __init__(
         self,
         handlers: Mapping[AgentId, ExpertHandler] | None = None,
+        registry: AgentRegistry | None = None,
     ) -> None:
-        self._handlers = dict(handlers or {})
+        self._registry = registry or AgentRegistry()
+        self._handlers = (
+            dict(handlers) if handlers is not None else _default_handlers()
+        )
 
     def execute(
         self,
         plan: ExecutionPlan,
-    ) -> tuple[list[ExecutionEvent], list[ExpertResult]]:
+        original_user_request: str | None = None,
+    ) -> tuple[list[ExecutionEvent], dict[str, ExpertResult]]:
+        """Run plan nodes in dependency-ready parallel batches.
+
+        The executor never adds, removes, reorders, or selects business steps.
+        """
+
         if plan.needs_clarification:
-            return [], []
+            return [], {}
 
         step_by_id = {step.id: step for step in plan.steps}
         pending = set(step_by_id)
         results: dict[str, ExpertResult] = {}
         events: list[ExecutionEvent] = []
+        user_request = (original_user_request or plan.goal).strip()
 
         while pending:
             blocked = [
@@ -47,28 +63,36 @@ class WorkflowExecutor:
                     for dependency in step_by_id[step_id].depends_on
                 )
             ]
-            for step in sorted(blocked, key=lambda item: item.id):
-                result = ExpertResult(
-                    step_id=step.id,
-                    agent=step.agent,
-                    status="blocked",
-                    error="A dependency did not complete successfully.",
-                )
-                results[step.id] = result
-                pending.remove(step.id)
-                events.append(
-                    _event(
-                        events,
-                        result,
-                        "blocked",
-                        "Step blocked because a dependency failed.",
+            if blocked:
+                for step in sorted(blocked, key=lambda item: item.id):
+                    result = ExpertResult(
+                        task_id=step.id,
+                        agent=step.agent,
+                        status="blocked",
+                        summary="步骤因必需依赖失败而被阻断。",
+                        error="A required dependency did not complete successfully.",
                     )
-                )
+                    results[step.id] = result
+                    pending.remove(step.id)
+                    events.append(
+                        _event(
+                            "step_failed",
+                            step.id,
+                            step.agent,
+                            "步骤因必需依赖失败而被阻断。",
+                            {"status": "blocked"},
+                        )
+                    )
+                # Re-evaluate descendants so a newly blocked result cannot run.
+                continue
 
             ready = [
                 step_by_id[step_id]
                 for step_id in pending
-                if all(dependency in results for dependency in step_by_id[step_id].depends_on)
+                if all(
+                    dependency in results
+                    for dependency in step_by_id[step_id].depends_on
+                )
             ]
             if not ready:
                 if pending:
@@ -79,99 +103,120 @@ class WorkflowExecutor:
             tasks: list[ExpertTask] = []
             for step in ready:
                 task = ExpertTask(
-                    step_id=step.id,
+                    task_id=step.id,
                     agent=step.agent,
                     objective=step.objective,
-                    expected_output=step.expected_output,
+                    original_user_request=user_request,
+                    inputs=step.inputs,
                     dependency_results={
-                        dependency: results[dependency].output
+                        dependency: results[dependency]
                         for dependency in step.depends_on
                     },
                 )
                 tasks.append(task)
                 events.append(
-                    ExecutionEvent(
-                        sequence=len(events) + 1,
-                        step_id=step.id,
-                        agent=step.agent,
-                        status="started",
-                        message="Step execution started.",
+                    _event(
+                        "step_started",
+                        step.id,
+                        step.agent,
+                        f"{self._registry.get(step.agent).name} 开始执行任务。",
                     )
                 )
 
-            with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-                futures = [
-                    pool.submit(self._execute_task, task)
-                    for task in tasks
-                ]
+            with ThreadPoolExecutor(max_workers=max(1, len(tasks))) as pool:
+                futures = [pool.submit(self._execute_task, task) for task in tasks]
                 batch_results = [future.result() for future in futures]
 
             for result in batch_results:
-                results[result.step_id] = result
-                pending.remove(result.step_id)
-                status = "completed" if result.status == "completed" else "failed"
+                results[result.task_id] = result
+                pending.remove(result.task_id)
+                for call in result.tool_calls:
+                    events.append(
+                        _event(
+                            "tool_called",
+                            result.task_id,
+                            result.agent,
+                            f"{result.agent.value} 调用了 {call.get('tool', 'tool')}。",
+                            {"tool": call.get("tool"), "status": call.get("status")},
+                        )
+                    )
+                event_type = (
+                    "step_completed"
+                    if result.status == "completed"
+                    else "step_failed"
+                )
                 events.append(
                     _event(
-                        events,
-                        result,
-                        status,
+                        event_type,
+                        result.task_id,
+                        result.agent,
                         (
-                            "Step execution completed."
-                            if status == "completed"
-                            else "Step execution failed."
+                            f"{result.agent.value} 步骤执行完成。"
+                            if result.status == "completed"
+                            else f"{result.agent.value} 步骤执行失败。"
                         ),
                     )
                 )
 
-        ordered_results = [
-            results[step.id]
+        # Dict insertion order is normalized to the plan, not completion timing.
+        return events, {
+            step.id: results[step.id]
             for step in plan.steps
             if step.id in results
-        ]
-        return events, ordered_results
+        }
 
     def _execute_task(self, task: ExpertTask) -> ExpertResult:
-        handler = self._handlers.get(task.agent, _placeholder_handler)
+        if not self._registry.is_enabled(task.agent):
+            return _failure(
+                task,
+                f"Expert '{task.agent.value}' is disabled and cannot execute.",
+            )
+        handler = self._handlers.get(task.agent)
+        if handler is None:
+            return _failure(
+                task,
+                f"No real implementation is registered for '{task.agent.value}'.",
+            )
         try:
-            result = handler(task)
-            if result.step_id != task.step_id or result.agent != task.agent:
+            raw_result: Any = handler(task)
+            result = ExpertResult.model_validate(raw_result)
+            if result.task_id != task.task_id or result.agent != task.agent:
                 raise ValueError("Expert result does not match its assigned task")
             return result
-        except Exception as exc:
-            return ExpertResult(
-                step_id=task.step_id,
-                agent=task.agent,
-                status="failed",
-                error=str(exc),
-            )
+        except Exception:
+            return _failure(task, "Expert execution raised an internal error.")
 
 
-def _placeholder_handler(task: ExpertTask) -> ExpertResult:
-    """Return a deterministic placeholder until real experts are implemented."""
+def _default_handlers() -> dict[AgentId, ExpertHandler]:
+    return {
+        AgentId.RESEARCH: ResearchAgent(),
+        AgentId.RISK: RiskAgent(),
+        AgentId.REPORT: ReportAgent(),
+    }
 
+
+def _failure(task: ExpertTask, error: str) -> ExpertResult:
     return ExpertResult(
-        step_id=task.step_id,
+        task_id=task.task_id,
         agent=task.agent,
-        status="completed",
-        output={
-            "mode": "placeholder",
-            "objective": task.objective,
-            "expected_output": task.expected_output,
-            "dependency_results": task.dependency_results,
-        },
+        status="failed",
+        summary="专家步骤未成功执行。",
+        limitations=[error],
+        error=error,
     )
 
 
 def _event(
-    events: list[ExecutionEvent],
-    result: ExpertResult,
-    status: str,
+    event_type: str,
+    step_id: str | None,
+    agent: AgentId | None,
     message: str,
+    metadata: dict[str, Any] | None = None,
 ) -> ExecutionEvent:
     return ExecutionEvent(
-        sequence=len(events) + 1,
-        step_id=result.step_id,
-        agent=result.agent,
-        status=status,
+        type=event_type,
+        step_id=step_id,
+        agent=agent,
         message=message,
+        metadata=metadata or {},
     )

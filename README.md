@@ -1,9 +1,10 @@
-# AlphaOS v0.2
+# AlphaOS v0.3
 
-**AlphaOS: Dynamic Multi-Agent Planning Kernel**
+**AlphaOS: Dynamic Real Expert Execution**
 
-AlphaOS is an autonomous AI quant research organization. Version 0.2 replaces
-single-agent routing with Manager-generated, dependency-aware execution plans.
+AlphaOS is a dynamic AI organization, not a fixed Agent pipeline. Version 0.3
+connects Manager-generated, dependency-aware task graphs to real Research,
+Risk, and Report experts.
 
 ## Architecture
 
@@ -20,21 +21,28 @@ The Manager is the orchestrator, not an expert. It asks Volcano Ark to select
 the necessary experts and create a JSON task graph for each request. Plans are
 validated with Pydantic and semantic graph checks before execution.
 
-The expert pool contains:
+The complete expert pool and current availability are:
 
-| Expert | Responsibility |
-| --- | --- |
-| `research` | Company, industry, and fundamental research |
-| `quant` | Quantitative analysis and verifiable strategy design |
-| `risk` | Risk, assumptions, stress scenarios, and failure modes |
-| `portfolio` | Portfolio construction, constraints, and allocation |
-| `macro` | Macro, policy, cycle, and cross-asset context |
-| `report` | Evidence organization and report presentation |
+| Expert | Enabled | Responsibility |
+| --- | --- | --- |
+| `research` | yes | PandaData market research and deterministic metrics |
+| `risk` | yes | Independent or dependency-based risk review |
+| `report` | yes | Optional integration of existing expert results |
+| `quant` | no | Quantitative analysis and strategy validation |
+| `portfolio` | no | Portfolio construction and constraints |
+| `macro` | no | Macro, policy, and cycle context |
 
 Independent task-graph nodes execute in parallel. Dependent nodes receive the
-outputs of their declared prerequisites. Expert business logic is intentionally
-placeholder-only in this iteration; the executor returns explicit placeholder
-results without pretending they are real research.
+complete structured `ExpertResult` objects of their declared prerequisites.
+The task graph is the executor's only source of truth: it never appends Risk or
+Report, changes dependencies, or substitutes a hardcoded
+Research → Risk → Report workflow. Disabled experts cannot return placeholder
+successes and are not exposed to Manager planning.
+
+Research calls PandaData and calculates returns, volatility, drawdown, price,
+and volume metrics in Python. Ark only explains already-calculated evidence.
+Risk works either independently or from cited upstream evidence. Report is an
+optional node used only when selected by the Manager.
 
 The Manager performs one limited repair call if Ark returns invalid JSON. There
 are no uncontrolled model retry loops and no hardcoded keyword workflows.
@@ -127,11 +135,18 @@ The response contains:
 ```json
 {
   "plan": {},
-  "execution_events": [],
-  "expert_results": [],
-  "final_answer": "Manager synthesis"
+  "events": [],
+  "results": {},
+  "final_answer": "Manager synthesis",
+  "duration_ms": 0,
+  "disclaimer": "本结果仅用于研究与演示，不构成投资建议、荐股或收益承诺。"
 }
 ```
+
+Events use frontend-ready types including `plan_created`, `step_started`,
+`tool_called`, `step_completed`, `step_failed`, `synthesis_started`, and
+`task_completed`. Credentials and complete sensitive external responses are
+never included.
 
 `POST /api/route` remains available temporarily but is marked deprecated. It is
 not used by the v0.2 planning or task APIs.
@@ -158,9 +173,19 @@ curl -X POST "http://127.0.0.1:8000/api/market-data" \
 
 ## Tests
 
-Ark is mocked in all planning-kernel tests, so automated tests do not spend API
-quota.
+Ark and PandaData are mocked in automated tests, so the suite does not spend
+real API quota.
 
 ```powershell
 python -m pytest -q tests
 ```
+
+For an opt-in real integration smoke test after configuring credentials:
+
+```powershell
+python tests/manual_test_dynamic_execution.py
+```
+
+It exercises Research only, Research → Risk, and
+Research → Risk → Report as three examples. They are acceptance scenarios, not
+hardcoded routes; the Manager may generate any valid minimal-sufficient DAG.
