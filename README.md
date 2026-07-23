@@ -30,13 +30,37 @@ The enabled expert pool is:
 | `research` | yes | PandaData market research and deterministic metrics |
 | `quant` | yes | Factor hypotheses and pinned R020 computation |
 | `risk` | yes | Independent or dependency-based risk review |
+| `macro` | yes | PandaData-backed macro environment, policy, cycle, rate, and liquidity analysis |
 | `report` | yes | Optional integration of declared upstream results |
 | `portfolio` | no | Reserved; no implementation |
-| `macro` | no | Reserved; no implementation |
 
 Quant is never automatically added to a request. Risk and Report are never
-automatically appended to Quant. The executor runs exactly the Manager-created
-DAG, while Quant executes its own validated Skill DAG internally.
+automatically appended to Quant. Macro is never automatically appended either;
+it is selected only when a request genuinely needs macro-environment analysis.
+The executor runs exactly the Manager-created DAG, while Quant executes its own
+validated Skill DAG internally.
+
+## Macro Agent
+
+Macro Agent is dynamically selected and backed by PandaData historical data:
+
+- It dynamically selects reviewed PandaData macro categories (at most four) and
+  catalog-returned indicators (at most eight); the Manager never picks macro
+  indicators or APIs.
+- Forward-looking requests default to the most recent 24-month historical
+  evidence window ending at the execution date.
+- Execution runs three structured Ark stages (data plan, indicator selection,
+  and analysis) sharing a single repair attempt.
+- There is no model-only fallback: when PandaData evidence is unavailable the
+  task fails instead of fabricating macro claims.
+- It never screens stocks, predicts prices, or produces trade advice.
+
+Test commands:
+
+- `python -m pytest -q tests/test_macro_agent.py` runs the mocked unit and
+  orchestration tests (no network or quota).
+- `python tests/manual_test_macro_agent.py` is the opt-in, quota-consuming real
+  Ark and PandaData smoke test.
 
 ## Current Skill Runtime
 
@@ -223,12 +247,13 @@ Currently supported:
 - Report
 - Quant factor idea generation
 - Quant R020 factor computation
+- Macro environment, policy, cycle, rate, and liquidity analysis
 
 Not currently supported:
 
 - Complete factor backtesting
 - Multidimensional IC diagnostics
-- Portfolio Agent or Macro Agent
+- Portfolio Agent
 - Automatic trading, order placement, or buy/sell recommendations
 - Dynamic execution of unknown GitHub code
 

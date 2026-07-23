@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -437,3 +438,48 @@ def test_default_executor_registers_real_macro_agent() -> None:
     handlers = _default_handlers()
 
     assert isinstance(handlers[AgentId.MACRO], MacroAgent)
+
+
+def test_semiconductor_macro_result_has_complete_json_structure() -> None:
+    data = MockMacroData()
+    ark = MockArk(
+        {
+            "categories": ["CI", "ED"],
+            "indicator_search_terms": ["景气", "电子"],
+            "reasoning": ["周期与半导体行业"],
+        },
+        {
+            "indicators": [
+                {"symbol": "CI0000001", "rationale": "周期"}
+            ]
+        },
+        valid_analysis(),
+    )
+
+    result = MacroAgent(
+        data_client=data,
+        ark_client=ark,
+        today_provider=lambda: date(2026, 7, 23),
+    ).execute(macro_task("半导体"))
+
+    assert set(result.metadata["macro_analysis"]) == {
+        "conclusion",
+        "economic_cycle",
+        "interest_rate",
+        "policy_factors",
+        "liquidity",
+        "market_environment",
+        "positive_factors",
+        "risks",
+    }
+
+
+def test_macro_prompt_prohibits_price_forecasts_and_trade_advice() -> None:
+    prompt = (
+        Path("backend/prompts/macro.md")
+        .read_text(encoding="utf-8")
+    )
+
+    assert "不要预测股票价格" in prompt
+    assert "不要输出具体买卖建议" in prompt
+    assert "PandaData" in prompt
