@@ -361,3 +361,79 @@ def test_macro_continues_with_partial_api_failure() -> None:
     assert [item["symbol"] for item in result.evidence] == ["CI0000001"]
     assert any("部分" in item for item in result.limitations)
     assert "provider detail" not in result.model_dump_json()
+
+
+from backend.agents.manager_agent import ManagerAgent
+from backend.core.agent_registry import AgentRegistry
+from backend.core.contracts import ExecutionPlan
+from backend.core.workflow_executor import WorkflowExecutor, _default_handlers
+
+
+def plan_payload(agent: str, inputs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "goal": "动态任务",
+        "intent": "按任务选择专家",
+        "complexity": "low",
+        "selected_agents": [{"agent": agent, "reason": "最小充分专家"}],
+        "steps": [
+            {
+                "id": f"{agent}_1",
+                "agent": agent,
+                "objective": "完成专家分析",
+                "inputs": inputs,
+                "depends_on": [],
+                "expected_output": "结构化专家结果",
+            }
+        ],
+        "needs_clarification": False,
+        "clarification_question": None,
+    }
+
+
+def test_registry_exposes_enabled_macro_but_keeps_portfolio_disabled() -> None:
+    registry = AgentRegistry()
+    ids = {item["id"] for item in registry.prompt_payload()}
+
+    assert "macro" in ids
+    assert "portfolio" not in ids
+    assert registry.is_enabled(AgentId.MACRO)
+
+
+def test_manager_accepts_macro_and_quant_only_dynamic_plans() -> None:
+    macro_manager = ManagerAgent(
+        client=MockArk(
+            plan_payload(
+                "macro",
+                {
+                    "industry": "新能源",
+                    "time_range": "未来12个月",
+                    "research_goal": "判断宏观支持程度",
+                },
+            )
+        )
+    )
+    quant_manager = ManagerAgent(
+        client=MockArk(
+            plan_payload(
+                "quant",
+                {
+                    "symbols": ["000001.SZ"],
+                    "start_date": "20240101",
+                    "end_date": "20241231",
+                },
+            )
+        )
+    )
+
+    assert macro_manager.create_plan("分析新能源宏观环境").steps[0].agent == AgentId.MACRO
+    quant_plan = quant_manager.create_plan("分析某股票历史收益")
+    assert [step.agent for step in quant_plan.steps] == [AgentId.QUANT]
+    prompt = quant_manager._planning_prompt("历史收益")
+    assert '"id": "macro"' in prompt
+    assert "不得自动追加 macro" in prompt
+
+
+def test_default_executor_registers_real_macro_agent() -> None:
+    handlers = _default_handlers()
+
+    assert isinstance(handlers[AgentId.MACRO], MacroAgent)
