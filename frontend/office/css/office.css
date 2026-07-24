@@ -535,6 +535,17 @@ button.task-item:hover { border-color: var(--cyan-dim); }
 .quick-chips .qchip:hover { border-color: var(--cyan-dim); color: var(--text); transform: translateY(-1px); }
 .follow-viewall { text-align: center; margin-top: 8px; }
 
+/* ---------- neon screen title ---------- */
+.screen-title { margin-bottom: 14px; }
+.screen-title h1 {
+  display: inline-flex; align-items: center; gap: 10px; margin: 0; font-size: 20px;
+  padding: 6px 16px; border: 1px solid rgba(34, 211, 238, 0.4); border-radius: 10px;
+  background: rgba(34, 211, 238, 0.06); box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.08);
+}
+.screen-title h1 .st-brk { color: var(--cyan); font-weight: 800; letter-spacing: 1px; }
+.screen-title h1 .st-bar { color: var(--cyan-dim); }
+.screen-title p { margin: 10px 2px 0; color: var(--text-2); font-size: 12.5px; }
+
 @media (max-width: 1180px) {
   .report-layout, .rpt-hero, .report-charts { grid-template-columns: 1fr; }
   .follow-panel { height: auto; min-height: 420px; }

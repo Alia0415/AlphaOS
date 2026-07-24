@@ -2,7 +2,20 @@
 // Renders the sidebar / topbar / statusbar chrome and the page outlet.
 // Demo data comes from mock.js; every demo value stays labelled DEMO in UI.
 import { store } from "./store.js";
-import { AGENTS, REPORTS, SOON_PAGES, OFFICE_FEED } from "./mock.js";
+import {
+  AGENTS,
+  REPORTS,
+  SOON_PAGES,
+  OFFICE_FEED,
+  TEAM_RADAR,
+  RECOMMENDED_GROUPS,
+  CLARIFY_GROUPS,
+  ANALYSIS_SCOPE,
+  DEMO_TASK,
+  WAR_SCRIPT,
+  SKILL_FINAL_COUNTS,
+  HISTORY_TASKS,
+} from "./mock.js";
 
 // ---------------------------------------------------------------------------
 // tiny DOM helpers
@@ -25,6 +38,14 @@ function esc(str) {
 
 function nowClock() {
   return new Date().toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+// Neon bracketed screen heading, e.g. 「界面 04 │ 专家中心」 with optional subtitle.
+function screenTitle(num, name, sub) {
+  const box = el("div", "screen-title");
+  box.innerHTML = `<h1><span class="st-brk">✦ 界面 ${esc(num)}</span> <span class="st-bar">│</span> ${esc(name)}</h1>` +
+    (sub ? `<p>${esc(sub)}</p>` : "");
+  return box;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +122,7 @@ function avatar(agentOrSheet, sizePx = 40, wrapCls = "pix-ava") {
 // ---------------------------------------------------------------------------
 const NAV = [
   { route: "hall", ico: "🏛", label: "投研大厅" },
+  { route: "war", ico: "🛰", label: "多 Agent 作战室" },
   { route: "tasks", ico: "🗂", label: "任务中心" },
   { route: "experts", ico: "👥", label: "专家中心" },
   { route: "reports", ico: "📑", label: "研究报告" },
@@ -116,6 +138,9 @@ const NAV = [
 
 let currentRoute = "reports";
 let routeParam = null;
+// teardown hook for pages that own timers / animation frames (war room, live scenes)
+let activeTeardown = null;
+function registerTeardown(fn) { activeTeardown = fn; }
 
 // ---------------------------------------------------------------------------
 // shell — sidebar / topbar / statusbar
@@ -260,6 +285,86 @@ function drawLineChart(canvas, trend) {
 }
 
 // ---------------------------------------------------------------------------
+// canvas radar chart (capability radar)
+// ---------------------------------------------------------------------------
+function drawRadar(canvas, radar, size = 220) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = size * dpr;
+  canvas.height = size * dpr;
+  canvas.style.width = `${size}px`;
+  canvas.style.height = `${size}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, size, size);
+
+  const labels = radar.labels || [];
+  const vals = radar.values || [];
+  const n = labels.length;
+  if (!n) return;
+  const cx = size / 2;
+  const cy = size / 2;
+  const R = size / 2 - 30;
+  const ang = (i) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
+  const maxV = 100;
+
+  // concentric rings
+  ctx.strokeStyle = "#16304f";
+  ctx.lineWidth = 1;
+  for (let r = 1; r <= 4; r++) {
+    const rr = (R * r) / 4;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const a = ang(i);
+      const x = cx + rr * Math.cos(a);
+      const y = cy + rr * Math.sin(a);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // spokes + axis labels
+  ctx.fillStyle = "#7fa3c7";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  for (let i = 0; i < n; i++) {
+    const a = ang(i);
+    ctx.strokeStyle = "#16304f";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
+    ctx.stroke();
+    const lx = cx + (R + 15) * Math.cos(a);
+    const ly = cy + (R + 15) * Math.sin(a);
+    ctx.fillText(labels[i], lx, ly + 3);
+  }
+
+  // value polygon
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const a = ang(i);
+    const rr = (R * Math.min(vals[i] ?? 0, maxV)) / maxV;
+    const x = cx + rr * Math.cos(a);
+    const y = cy + rr * Math.sin(a);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "rgba(34, 211, 238, 0.18)";
+  ctx.fill();
+  ctx.strokeStyle = "#22d3ee";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = "#22d3ee";
+  for (let i = 0; i < n; i++) {
+    const a = ang(i);
+    const rr = (R * Math.min(vals[i] ?? 0, maxV)) / maxV;
+    ctx.beginPath();
+    ctx.arc(cx + rr * Math.cos(a), cy + rr * Math.sin(a), 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
 function navigate(route, param = null) {
@@ -271,6 +376,7 @@ function navigate(route, param = null) {
 }
 
 function renderPage() {
+  if (activeTeardown) { try { activeTeardown(); } catch (_) {} activeTeardown = null; }
   const page = $("#page");
   page.innerHTML = "";
   switch (currentRoute) {
@@ -280,6 +386,12 @@ function renderPage() {
       break;
     case "hall":
       page.appendChild(pageHall());
+      break;
+    case "clarify":
+      page.appendChild(pageClarify());
+      break;
+    case "war":
+      page.appendChild(pageWarRoom());
       break;
     case "experts":
       page.appendChild(pageExperts());
@@ -641,24 +753,184 @@ function statusText(s) {
 }
 
 // ---------------------------------------------------------------------------
-// page: experts (grid)
+// page: experts (master-detail, 界面 04)
 // ---------------------------------------------------------------------------
+let expertSel = "manager";
+let expertTab = "cap";
+let expertQuery = "";
+let expertFilter = "all";
+
 function pageExperts() {
-  const wrap = el("div", "panel");
-  wrap.appendChild(el("div", "panel-title", "专家中心 <span class='title-extra'>AlphaOS 专家池</span>"));
+  const layout = el("div", "experts-layout");
+  const left = el("div", "panel");
+  left.appendChild(screenTitle("04", "专家中心", "AlphaOS 专家团队由领域顶尖 AI Agent 组成，覆盖宏观、行业、量化、风险、研究与报告全链路。"));
+
+  // toolbar
+  const toolbar = el("div", "experts-toolbar");
+  const search = el("input");
+  search.type = "text";
+  search.placeholder = "🔍 搜索专家或技能…";
+  search.value = expertQuery;
+  search.addEventListener("input", () => { expertQuery = search.value; renderExpertGrid(grid); });
+  const filter = el("select");
+  [["all", "全部状态"], ["online", "在线"], ["working", "工作中"], ["busy", "忙碌"]].forEach(([v, t]) => {
+    const o = el("option", "", esc(t)); o.value = v; if (v === expertFilter) o.selected = true; filter.appendChild(o);
+  });
+  filter.addEventListener("change", () => { expertFilter = filter.value; renderExpertGrid(grid); });
+  toolbar.append(search, filter);
+  left.appendChild(toolbar);
+
   const grid = el("div", "experts-grid");
-  AGENTS.forEach((a) => {
+  left.appendChild(grid);
+  renderExpertGrid(grid);
+
+  // footer counts
+  const foot = el("div", "experts-foot");
+  const by = (s) => AGENTS.filter((a) => a.status === s).length;
+  foot.innerHTML = `<span>共 ${AGENTS.length} 位专家</span>
+    <span><span class="dot ok"></span>在线 ${by("online")}</span>
+    <span><span class="dot" style="background:#60a5fa"></span>工作中 ${by("working")}</span>
+    <span><span class="dot warn"></span>忙碌 ${by("busy")}</span>
+    <span><span class="dot"></span>离线 ${by("off")}</span>`;
+  left.appendChild(foot);
+
+  layout.appendChild(left);
+  const detail = el("div", "panel");
+  detail.id = "expertDetail";
+  layout.appendChild(detail);
+  renderExpertDetail(detail);
+  return layout;
+}
+
+function renderExpertGrid(grid) {
+  grid.innerHTML = "";
+  const q = expertQuery.trim();
+  AGENTS.filter((a) => {
+    if (expertFilter !== "all" && a.status !== expertFilter) return false;
+    if (!q) return true;
+    const hay = `${a.name} ${a.role} ${a.specialty} ${(a.skills || []).map((s) => s.name).join(" ")}`;
+    return hay.includes(q);
+  }).forEach((a) => {
     const enabled = store.state.agentEnabled[a.id] !== false;
-    const card = el("button", `expert-card${enabled ? "" : " off"}`);
+    const card = el("button", `expert-card${a.id === expertSel ? " sel" : ""}${enabled ? "" : " off"}`);
     card.appendChild(avatar(a.id, 64, "ec-ava"));
     card.appendChild(el("strong", "", esc(a.name)));
-    card.appendChild(el("div", "ec-spec", esc(a.duty)));
+    card.appendChild(el("div", "", `<span style="color:var(--text-2);font-size:11.5px">${esc(a.role)}</span> <span class="badge ${a.status}"><span class="dot"></span>${statusText(a.status)}</span>`));
+    card.appendChild(el("div", "ec-spec", esc(a.specialty)));
+    card.appendChild(el("div", "ec-desc", `已安装技能 <b style="color:var(--cyan)">${a.skillCount}</b> 个`));
     card.appendChild(el("div", "ec-desc", esc(a.desc)));
-    card.addEventListener("click", () => toast(`${a.name} · ${a.specialty}`));
+    card.addEventListener("click", () => {
+      expertSel = a.id; expertTab = "cap";
+      renderExpertGrid(grid);
+      renderExpertDetail($("#expertDetail"));
+    });
     grid.appendChild(card);
   });
-  wrap.appendChild(grid);
-  return wrap;
+}
+
+function renderExpertDetail(panel) {
+  if (!panel) return;
+  const a = agentById(expertSel) || AGENTS[0];
+  panel.innerHTML = "";
+
+  const head = el("div", "detail-head");
+  head.appendChild(avatar(a.id, 74, "pix-ava dh-ava"));
+  const hinfo = el("div");
+  hinfo.style.flex = "1";
+  hinfo.innerHTML = `<div style="font-size:20px;font-weight:700">${esc(a.name)}</div>
+    <div style="color:var(--text-2);font-size:12.5px">${esc(a.role)} <span class="badge ${a.status}"><span class="dot"></span>${statusText(a.status)}</span></div>`;
+  head.appendChild(hinfo);
+  const mgBtn = el("button", "btn", "👥 团队管理");
+  mgBtn.addEventListener("click", () => toast("团队管理面板规划中（DEMO）"));
+  head.appendChild(mgBtn);
+  panel.appendChild(head);
+
+  panel.appendChild(el("p", "", `<span style="color:var(--text-2);line-height:1.7">${esc(a.desc)}</span>`));
+
+  const stars = "★★★★★".slice(0, Math.round(a.rating)) + "☆☆☆☆☆".slice(0, 5 - Math.round(a.rating));
+  const stats = el("div", "detail-stats");
+  stats.innerHTML = `
+    <div class="ds"><strong>${esc(a.joined)}</strong><span>加入时间</span></div>
+    <div class="ds"><strong>${esc(a.years)}</strong><span>经验年限</span></div>
+    <div class="ds"><strong>${esc(a.completion)}</strong><span>任务完成率</span></div>
+    <div class="ds"><strong style="color:var(--yellow)">${a.rating}</strong><span>${stars}</span></div>`;
+  panel.appendChild(stats);
+
+  const tabs = el("div", "tabs");
+  [["cap", "能力概览"], ["tasks", "近期任务"], ["contrib", "贡献表现"], ["skills", "技能列表"], ["config", "配置管理"]].forEach(([k, t]) => {
+    const tab = el("button", `tab${expertTab === k ? " active" : ""}`, esc(t));
+    tab.addEventListener("click", () => { expertTab = k; renderExpertDetail(panel); });
+    tabs.appendChild(tab);
+  });
+  panel.appendChild(tabs);
+
+  const body = el("div");
+  panel.appendChild(body);
+
+  if (expertTab === "cap") {
+    body.appendChild(el("div", "follow-sec-title", "核心能力"));
+    const bars = el("div", "cap-bars");
+    (a.capabilities || []).forEach((c) => {
+      bars.appendChild(el("div", "cap-bar", `<span>${esc(c.label)}</span>
+        <span class="cb-track"><i style="width:${c.pct}%"></i></span>
+        <span style="text-align:right;color:var(--green)">${c.pct}%</span>`));
+    });
+    body.appendChild(bars);
+    body.appendChild(el("div", "follow-sec-title", "能力雷达"));
+    const rwrap = el("div");
+    rwrap.style.cssText = "display:grid;place-items:center;padding:6px 0";
+    const canvas = el("canvas");
+    rwrap.appendChild(canvas);
+    body.appendChild(rwrap);
+    requestAnimationFrame(() => drawRadar(canvas, a.radar, 240));
+  } else if (expertTab === "tasks") {
+    (a.recentTasks || []).forEach((t) => {
+      const row = el("button", "task-row");
+      row.innerHTML = `<span style="flex:1">${esc(t.title)}</span>
+        <span class="tr-tag">${esc(t.tag)}</span>
+        <span class="badge ${t.status === "running" ? "running" : "done"}"><span class="dot"></span>${t.status === "running" ? "进行中" : "完成"}</span>
+        <span class="tr-time">${esc(t.time)}</span>`;
+      row.addEventListener("click", () => toast(`${t.title}（DEMO）`));
+      body.appendChild(row);
+    });
+  } else if (expertTab === "contrib") {
+    const grid = el("div", "detail-stats");
+    grid.style.gridTemplateColumns = "repeat(3,1fr)";
+    grid.innerHTML = `
+      <div class="ds"><strong>${a.recentTasks ? a.recentTasks.length + 24 : 28}</strong><span>近30天任务</span></div>
+      <div class="ds"><strong style="color:var(--green)">96%</strong><span>完成率</span></div>
+      <div class="ds"><strong>${a.skillCount}</strong><span>影响策略</span></div>`;
+    body.appendChild(grid);
+    body.appendChild(el("div", "follow-sec-title", "贡献趋势（近 5 周 · DEMO）"));
+    const canvas = el("canvas");
+    const box = el("div", "chart-box");
+    box.appendChild(canvas);
+    body.appendChild(box);
+    const trend = { title: "", labels: ["W1", "W2", "W3", "W4", "W5"], series: [{ name: "贡献值", color: "#34d399", data: [62, 70, 66, 82, 90] }] };
+    requestAnimationFrame(() => drawLineChart(canvas, trend));
+  } else if (expertTab === "skills") {
+    body.appendChild(el("div", "follow-sec-title", `已安装技能 · ${a.skillCount} 个`));
+    (a.skills || []).forEach((s) => {
+      const row = el("div", "skill-row");
+      row.innerHTML = `<span>🧩</span><span>${esc(s.name)}</span><span class="sk-count" style="color:var(--text-3)">${esc(s.type)}</span>`;
+      body.appendChild(row);
+    });
+  } else if (expertTab === "config") {
+    const enabled = store.state.agentEnabled[a.id] !== false;
+    const enable = el("div", "op-enable");
+    enable.innerHTML = `<div><strong>启用该专家</strong><div class="op-note">禁用后 Manager 将不会把该专家纳入任务编排。</div></div>`;
+    const sw = el("button", `switch${enabled ? " on" : ""}`);
+    if (a.id === "manager") { sw.classList.add("disabled"); }
+    sw.addEventListener("click", () => {
+      if (a.id === "manager") { toast("Manager 为总控，不能禁用（DEMO）"); return; }
+      store.setAgentEnabled(a.id, !(store.state.agentEnabled[a.id] !== false));
+      renderExpertDetail(panel);
+      renderExpertGrid($(".experts-grid"));
+    });
+    enable.appendChild(sw);
+    body.appendChild(enable);
+    body.appendChild(el("div", "op-note", "更多配置（模型、温度、Skill 授权）规划中。"));
+  }
 }
 
 // ---------------------------------------------------------------------------
