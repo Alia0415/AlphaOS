@@ -62,6 +62,20 @@ class ManagerAgent:
                     "Manager Agent 在一次修复后仍未返回有效的执行计划。"
                 ) from None
 
+    def resume(
+        self,
+        user_request: str,
+        answers: dict[str, Any],
+    ) -> ExecutionPlan:
+        """Fold the user's clarification answers into the request and re-plan.
+
+        Re-planning re-applies the full single-repair discipline. If key
+        information is still missing, the Manager may again return a plan with
+        ``needs_clarification=true``.
+        """
+
+        return self.create_plan(_fold_answers(user_request, answers))
+
     def _parse_and_validate(self, raw_response: str) -> ExecutionPlan:
         payload = _extract_json(raw_response)
         plan = ExecutionPlan.model_validate(payload)
@@ -89,6 +103,10 @@ class ManagerAgent:
 复杂目标应按实际需要构建依赖图。depends_on 为空表示可立即并行执行。
 最多生成 8 个步骤。selected_agents 必须与 steps 中实际使用的专家完全一致。
 如果关键信息不足，将 needs_clarification 设为 true，并提供 clarification_question。
+当 needs_clarification 为 true 时，除自然语言 clarification_question 外，还应在
+clarification_options 中给出结构化选项组，便于用户快速选择：每组包含 key（英文短标识）、
+title（问题）、可选 hint、multi（是否可多选）、items（候选项文本列表）与可选 default。
+仅在真正缺少关键信息时才澄清；信息充分时 clarification_options 必须为空列表。
 你只能选择专家和专家间依赖，绝不能选择、编排或写入专家内部的底层 Skill。
 Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Manager 不得替它们
 做这件事，plan 中不得出现 skill_id 或 a_share_stock_dossier。
@@ -189,3 +207,22 @@ def _extract_json(value: str) -> Any:
         if len(lines) >= 3:
             text = "\n".join(lines[1:-1]).strip()
     return json.loads(text)
+
+
+def _fold_answers(user_request: str, answers: dict[str, Any]) -> str:
+    """Append the user's clarification answers to the original request text."""
+
+    request = user_request.strip()
+    pairs: list[str] = []
+    for key, value in answers.items():
+        if value is None or value == "" or value == []:
+            continue
+        if isinstance(value, (list, tuple)):
+            rendered = "、".join(str(item) for item in value if item != "")
+        else:
+            rendered = str(value)
+        if rendered:
+            pairs.append(f"{key}={rendered}")
+    if not pairs:
+        return request
+    return f"{request}\n\n用户澄清：" + "；".join(pairs) + "。"

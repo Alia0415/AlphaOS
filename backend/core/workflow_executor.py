@@ -40,10 +40,14 @@ class WorkflowExecutor:
         self,
         plan: ExecutionPlan,
         original_user_request: str | None = None,
+        event_sink: Callable[[ExecutionEvent], None] | None = None,
     ) -> tuple[list[ExecutionEvent], dict[str, ExpertResult]]:
         """Run plan nodes in dependency-ready parallel batches.
 
         The executor never adds, removes, reorders, or selects business steps.
+        When ``event_sink`` is provided, each emitted event is forwarded to it
+        as it is produced (for streaming), without changing the batch semantics
+        or the returned event list.
         """
 
         if plan.needs_clarification:
@@ -54,6 +58,11 @@ class WorkflowExecutor:
         results: dict[str, ExpertResult] = {}
         events: list[ExecutionEvent] = []
         user_request = (original_user_request or plan.goal).strip()
+
+        def emit(event: ExecutionEvent) -> None:
+            events.append(event)
+            if event_sink is not None:
+                event_sink(event)
 
         while pending:
             blocked = [
@@ -76,7 +85,7 @@ class WorkflowExecutor:
                     )
                     results[step.id] = result
                     pending.remove(step.id)
-                    events.append(
+                    emit(
                         _event(
                             "step_failed",
                             step.id,
@@ -116,7 +125,7 @@ class WorkflowExecutor:
                     },
                 )
                 tasks.append(task)
-                events.append(
+                emit(
                     _event(
                         "step_started",
                         step.id,
@@ -133,7 +142,7 @@ class WorkflowExecutor:
                 results[result.task_id] = result
                 pending.remove(result.task_id)
                 for internal_event in _safe_agent_events(result):
-                    events.append(
+                    emit(
                         _event(
                             internal_event["type"],
                             result.task_id,
@@ -146,7 +155,7 @@ class WorkflowExecutor:
                         )
                     )
                 for call in result.tool_calls:
-                    events.append(
+                    emit(
                         _event(
                             "tool_called",
                             result.task_id,
@@ -160,7 +169,7 @@ class WorkflowExecutor:
                     if result.status == "completed"
                     else "step_failed"
                 )
-                events.append(
+                emit(
                     _event(
                         event_type,
                         result.task_id,
