@@ -207,6 +207,11 @@ class SkillRegistry:
         except KeyError:
             raise KeyError(f"Unknown or unapproved skill: {skill_id}") from None
 
+    def specs(self) -> tuple[SkillSpec, ...]:
+        """Return every approved skill spec for read-only transparency surfaces."""
+
+        return tuple(self._skills.values())
+
     def is_enabled(self, skill_id: str) -> bool:
         spec = self._skills.get(skill_id)
         return bool(spec and spec.enabled)

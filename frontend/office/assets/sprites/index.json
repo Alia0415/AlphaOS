@@ -1,0 +1,51 @@
+{
+  "format": "AlphaOS pixel sprite atlas v1",
+  "display_frame_size": [
+    256,
+    256
+  ],
+  "sheets": [
+    {
+      "name": "bald-glasses",
+      "manifest": "bald-glasses/manifest.json",
+      "atlas": "bald-glasses/atlas.png",
+      "frame_count": 12
+    },
+    {
+      "name": "balding-square-glasses",
+      "manifest": "balding-square-glasses/manifest.json",
+      "atlas": "balding-square-glasses/atlas.png",
+      "frame_count": 11
+    },
+    {
+      "name": "bald-round-glasses",
+      "manifest": "bald-round-glasses/manifest.json",
+      "atlas": "bald-round-glasses/atlas.png",
+      "frame_count": 10
+    },
+    {
+      "name": "black-hair-businessman",
+      "manifest": "black-hair-businessman/manifest.json",
+      "atlas": "black-hair-businessman/atlas.png",
+      "frame_count": 11
+    },
+    {
+      "name": "white-hair-glasses",
+      "manifest": "white-hair-glasses/manifest.json",
+      "atlas": "white-hair-glasses/atlas.png",
+      "frame_count": 12
+    },
+    {
+      "name": "gray-mustache-businessman",
+      "manifest": "gray-mustache-businessman/manifest.json",
+      "atlas": "gray-mustache-businessman/atlas.png",
+      "frame_count": 12
+    },
+    {
+      "name": "white-beard-businessman",
+      "manifest": "white-beard-businessman/manifest.json",
+      "atlas": "white-beard-businessman/atlas.png",
+      "frame_count": 12
+    }
+  ]
+}
