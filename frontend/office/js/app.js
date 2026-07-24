@@ -32,7 +32,17 @@ import {
   fetchReport,
   setExpertEnabled as liveSetExpertEnabled,
   submitReportFollowup,
+  createSession as liveCreateSession,
+  clarifySession as liveClarifySession,
+  openTaskStream,
+  roleFor as liveRoleFor,
 } from "./live.js";
+
+// Live planning session shared across hall → clarify → war room. Holds the
+// real Manager plan and task id for the current run (live mode only).
+let liveSession = { taskId: null, prompt: "", plan: null };
+function setLiveSession(next) { liveSession = { ...liveSession, ...next }; }
+function resetLiveSession() { liveSession = { taskId: null, prompt: "", plan: null }; }
 
 // ---------------------------------------------------------------------------
 // mode (demo | live) — demo is the default showcase; live binds read-only
@@ -49,7 +59,7 @@ function setMode(mode) {
     renderTopbar();
     renderStatusbar();
     // land somewhere with guaranteed content for the active mode
-    navigate(mode === "live" ? "experts" : "reports", mode === "live" ? null : REPORTS[0].id);
+    navigate(mode === "live" ? "hall" : "reports", mode === "live" ? null : REPORTS[0].id);
   });
 }
 
@@ -147,6 +157,7 @@ const SPRITE_MAP = {
   user: "black-hair-businessman",
 };
 const FRAME = 256; // native frame is 256x256, atlas is a horizontal strip
+const SPRITE_SHEETS = new Set(Object.values(SPRITE_MAP)); // only these atlases exist
 const spriteCache = new Map(); // sheet -> { img, ready }
 
 function loadSprite(sheet) {
@@ -196,9 +207,9 @@ function avatar(agentOrSheet, sizePx = 40, wrapCls = "pix-ava") {
       ctx.fillRect(0, 0, FRAME, FRAME);
     }
   };
-  const entry = loadSprite(sheet);
+  const entry = SPRITE_SHEETS.has(sheet) ? loadSprite(sheet) : null;
   paint();
-  if (!entry.ready) entry.waiters.push(paint);
+  if (entry && !entry.ready) entry.waiters.push(paint);
   return wrap;
 }
 
@@ -497,13 +508,13 @@ function renderPage() {
       else page.appendChild(pageReportList());
       break;
     case "hall":
-      page.appendChild(pageHall());
+      page.appendChild(live ? pageHallLive() : pageHall());
       break;
     case "clarify":
-      page.appendChild(pageClarify());
+      page.appendChild(live ? pageClarifyLive() : pageClarify());
       break;
     case "war":
-      page.appendChild(pageWarRoom());
+      page.appendChild(live ? pageWarRoomLive() : pageWarRoom());
       break;
     case "experts":
       page.appendChild(live ? pageExpertsLive() : pageExperts());
@@ -909,7 +920,9 @@ function drawOfficeScene(canvas, agents) {
   };
 
   seats.forEach((a) => {
-    const e = loadSprite(SPRITE_MAP[a.id] || a.id);
+    const sheet = SPRITE_MAP[a.id] || a.id;
+    if (!SPRITE_SHEETS.has(sheet)) return;
+    const e = loadSprite(sheet);
     if (!e.ready) e.waiters.push(paint);
   });
   paint();
@@ -2274,6 +2287,568 @@ function submitLiveFollowup(report, question, scroll) {
 }
 
 // ---------------------------------------------------------------------------
+// live: hall — real research submission (界面 01 · 实时)
+// ---------------------------------------------------------------------------
+const LIVE_RECOMMENDED = [
+  "分析贵州茅台（600519.SH）近三个财年的盈利能力与财务质量",
+  "评估宁德时代（300750.SZ）的成长性与估值水平",
+  "梳理当前国内宏观经济与货币政策环境",
+];
+
+function pageHallLive() {
+  const wrap = el("div");
+  wrap.appendChild(screenTitle("01", "投研大厅 · 实时", "描述研究意向，Manager Agent 将实时拆解并编排真实专家团队（消耗模型额度）。"));
+
+  const grid = el("div", "hall-grid");
+
+  // ---- ask box ----
+  const askPanel = el("div", "panel");
+  askPanel.appendChild(el("div", "panel-title", "今天想研究什么？ <span class='title-extra'>提交后由真实 Manager Agent 规划</span>"));
+  const askBox = el("div", "ask-box");
+  const ta = el("textarea");
+  ta.placeholder = "例如：分析贵州茅台（600519.SH）近三个财年的盈利能力与财务质量…";
+  if (liveSession.prompt) ta.value = liveSession.prompt;
+  askBox.appendChild(ta);
+  const foot = el("div", "ask-foot");
+  const count = el("span", "ask-count", `${ta.value.length} / 500`);
+  ta.addEventListener("input", () => { count.textContent = `${ta.value.length} / 500`; });
+  const startBtn = el("button", "btn btn-primary", "🚀 开始研究");
+  const submit = () => {
+    const prompt = ta.value.trim();
+    if (!prompt) { toast("请先描述你的研究意向"); ta.focus(); return; }
+    startBtn.disabled = true;
+    startBtn.textContent = "Manager 规划中…";
+    resetLiveSession();
+    liveCreateSession(prompt)
+      .then(({ taskId, plan }) => {
+        setLiveSession({ taskId, prompt, plan });
+        navigate(plan && plan.needsClarification ? "clarify" : "war");
+      })
+      .catch((err) => {
+        startBtn.disabled = false;
+        startBtn.textContent = "🚀 开始研究";
+        toast(`规划失败：${err && err.message ? err.message : "后端不可用"}`);
+      });
+  };
+  startBtn.addEventListener("click", submit);
+  foot.append(count, startBtn);
+  askBox.appendChild(foot);
+  askPanel.appendChild(askBox);
+
+  const rec = el("div", "rec-row");
+  rec.appendChild(el("span", "rec-label", "💡 推荐任务"));
+  LIVE_RECOMMENDED.forEach((t) => {
+    const chip = el("button", "chip", esc(t));
+    chip.addEventListener("click", () => { ta.value = t; count.textContent = `${ta.value.length} / 500`; ta.focus(); });
+    rec.appendChild(chip);
+  });
+  askPanel.appendChild(rec);
+  grid.appendChild(askPanel);
+
+  // ---- live office preview ----
+  const officePanel = el("div", "panel");
+  officePanel.appendChild(el("div", "panel-title", "投研办公室 <span class='title-extra'>真实在线专家</span>"));
+  const preview = el("div", "office-preview");
+  const canvas = el("canvas");
+  preview.appendChild(canvas);
+  preview.appendChild(el("div", "live-tag", "<i></i>LIVE"));
+  officePanel.appendChild(preview);
+  const ofeed = el("div", "office-feed");
+  ofeed.innerHTML = `<span class="dot"></span><span>正在读取在线专家…</span>`;
+  officePanel.appendChild(ofeed);
+  grid.appendChild(officePanel);
+  wrap.appendChild(grid);
+
+  // ---- online experts strip (async) ----
+  const expertPanel = el("div", "panel");
+  expertPanel.style.marginTop = "18px";
+  const expertTitle = el("div", "panel-title", "在线专家 <span class='title-extra'>加载中…</span>");
+  expertPanel.appendChild(expertTitle);
+  const strip = el("div", "expert-strip");
+  strip.appendChild(stateBox("loading", "正在读取专家…"));
+  expertPanel.appendChild(strip);
+  wrap.appendChild(expertPanel);
+
+  // ---- overview stats (async) ----
+  const statPanel = el("div", "panel");
+  statPanel.style.marginTop = "18px";
+  statPanel.appendChild(el("div", "panel-title", "系统概览"));
+  const cards = el("div", "stat-cards");
+  statPanel.appendChild(cards);
+  wrap.appendChild(statPanel);
+
+  Promise.all([fetchExperts(), fetchOverview()])
+    .then(([experts, ov]) => {
+      const online = experts.filter((e) => e.status !== "off");
+      // office scene can only draw agents that have a pixel sprite sheet
+      const scene = experts.filter((e) => SPRITE_MAP[e.id]);
+      requestAnimationFrame(() => drawOfficeScene(canvas, scene.length ? scene : AGENTS));
+      const ofeedSpan = ofeed.querySelector("span:last-child");
+      if (ofeedSpan) ofeedSpan.textContent = `${online.length} 位专家在线协作`;
+      expertTitle.innerHTML = `在线专家 <span class='title-extra'>${online.length} 位专家在线协作</span>`;
+      strip.innerHTML = "";
+      experts.forEach((a) => {
+        const card = el("button", "expert-mini");
+        card.appendChild(avatar(a.id, 56, "em-ava"));
+        card.appendChild(el("strong", "", esc(a.name)));
+        card.appendChild(el("div", "em-role", esc(a.role)));
+        card.appendChild(el("span", `badge ${a.status}`, `<span class="dot"></span>${statusText(a.status)}`));
+        card.appendChild(el("div", "em-spec", esc(a.specialty)));
+        card.addEventListener("click", () => navigate("experts"));
+        strip.appendChild(card);
+      });
+      cards.innerHTML = "";
+      [
+        { num: `${ov.enabled_experts}`, label: "在线专家", sub: "真实注册专家", green: true, route: "experts" },
+        { num: `${ov.enabled_skills}`, label: "已启用 Skill", sub: "运行时 Skill", route: "skills" },
+        { num: `${ov.total_tasks}`, label: "累计任务", sub: `含 ${ov.completed_tasks} 个已完成`, route: "tasks" },
+        { num: `${ov.report_count}`, label: "已生成报告", sub: "可追问 / 检索", route: "reports" },
+      ].forEach((s) => {
+        const c = el("button", "stat-card");
+        c.innerHTML = `<div class="sc-num${s.green ? " green" : ""}">${esc(s.num)}</div><div class="sc-label">${esc(s.label)}</div><div class="sc-sub">${esc(s.sub)}</div>`;
+        c.addEventListener("click", () => navigate(s.route));
+        cards.appendChild(c);
+      });
+    })
+    .catch((err) => {
+      strip.innerHTML = "";
+      strip.appendChild(stateBox("error", "无法读取在线专家", err && err.message ? err.message : ""));
+      requestAnimationFrame(() => drawOfficeScene(canvas, AGENTS));
+    });
+
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// live: clarify — render real Manager clarification groups (界面 02 · 实时)
+// ---------------------------------------------------------------------------
+function pageClarifyLive() {
+  const session = liveSession;
+  if (!session.taskId || !session.plan) {
+    const wrap = el("div", "panel");
+    wrap.appendChild(screenTitle("02", "任务澄清 · 实时", ""));
+    const box = stateBox("empty", "尚无进行中的规划会话", "请先在投研大厅提交研究请求。");
+    const back = el("button", "btn btn-primary", "‹ 返回大厅");
+    back.style.marginTop = "10px";
+    back.addEventListener("click", () => navigate("hall"));
+    box.appendChild(back);
+    wrap.appendChild(box);
+    return wrap;
+  }
+
+  const plan = session.plan;
+  const groups = plan.clarificationOptions || [];
+  const sel = {};
+  groups.forEach((g) => {
+    sel[g.key] = new Set();
+    if (g.def != null && g.items.includes(g.def)) sel[g.key].add(g.items.indexOf(g.def));
+  });
+
+  const layout = el("div", "chat-layout");
+
+  // ---- left: Manager conversation ----
+  const left = el("div", "panel chat-col");
+  left.appendChild(screenTitle("02", "任务澄清 · 实时", "Manager 需要先确认关键口径，再编排真实专家团队。"));
+
+  const head = el("div", "chat-head");
+  head.appendChild(avatar("manager", 46, "pix-ava"));
+  const who = el("div", "who");
+  who.innerHTML = "<strong>Manager · 研究管理员</strong><small>正在澄清任务需求…</small>";
+  head.appendChild(who);
+  left.appendChild(head);
+
+  const scroll = el("div", "chat-scroll");
+  scroll.appendChild(clarifyMsg("bot", esc(plan.clarificationQuestion || "在正式开工前，请确认以下关键研究口径。")));
+
+  if (groups.length) {
+    const gridMsg = el("div", "msg");
+    const gAva = el("div", "m-avatar");
+    gAva.appendChild(avatar("manager", 38));
+    const gBody = el("div", "m-body");
+    gBody.style.maxWidth = "none";
+    gBody.appendChild(el("div", "m-meta", "<span>Manager</span><span>关键澄清项</span>"));
+    const gridWrap = el("div", "m-bubble");
+    gridWrap.style.width = "100%";
+    const optGrid = el("div", "clarify-grid");
+    gridWrap.appendChild(optGrid);
+    gBody.appendChild(gridWrap);
+    gridMsg.append(gAva, gBody);
+    scroll.appendChild(gridMsg);
+
+    const renderGrid = () => {
+      optGrid.innerHTML = "";
+      groups.forEach((g) => {
+        const card = el("div", "opt-card");
+        card.appendChild(el("h5", "", `${esc(g.title)} <small>${g.multi ? "可多选" : "单选"}</small>`));
+        if (g.hint) card.appendChild(el("div", "op-note", esc(g.hint)));
+        const list = el("div", "opt-list");
+        g.items.forEach((label, i) => {
+          const on = sel[g.key].has(i);
+          const item = el("button", `opt-item${on ? " sel" : ""}`);
+          item.innerHTML = `<span>${esc(label)}</span>${on ? '<span class="tick">✓</span>' : ""}`;
+          item.addEventListener("click", () => {
+            if (g.multi) {
+              if (sel[g.key].has(i)) sel[g.key].delete(i); else sel[g.key].add(i);
+            } else {
+              sel[g.key].clear(); sel[g.key].add(i);
+            }
+            renderGrid();
+          });
+          list.appendChild(item);
+        });
+        card.appendChild(list);
+        optGrid.appendChild(card);
+      });
+    };
+    renderGrid();
+  }
+
+  scroll.appendChild(clarifyMsg("bot", "确认后点击右侧「确认并提交澄清」，我会据此重新规划并进入作战室。"));
+  left.appendChild(scroll);
+
+  const inputBar = el("div", "chat-inputbar");
+  const input = el("input");
+  input.type = "text";
+  input.placeholder = "补充说明（可选）：例如特别关注的时间段或指标…";
+  inputBar.appendChild(input);
+  left.appendChild(inputBar);
+
+  // ---- right: confirm panel ----
+  const right = el("div", "panel chat-col");
+  right.appendChild(el("div", "panel-title", "澄清摘要"));
+  const kv = el("div", "summary-kv");
+  kv.appendChild(el("div", "", `<div class="k">研究目标</div><div>${esc(plan.goal || session.prompt)}</div>`));
+  if (plan.intent) kv.appendChild(el("div", "", `<div class="k">识别意图</div><div>${esc(plan.intent)}</div>`));
+  if (plan.complexity) kv.appendChild(el("div", "", `<div class="k">复杂度</div><div>${esc(plan.complexity)}</div>`));
+  right.appendChild(kv);
+
+  const go = el("button", "btn btn-primary", "🚀 确认并提交澄清");
+  go.style.cssText = "width:100%;margin-top:16px";
+  go.addEventListener("click", () => {
+    const answers = {};
+    groups.forEach((g) => {
+      const chosen = [...sel[g.key]].sort((a, b) => a - b).map((i) => g.items[i]);
+      if (!chosen.length) return;
+      answers[g.key] = g.multi ? chosen : chosen[0];
+    });
+    const supplement = input.value.trim();
+    if (supplement) answers.supplement = supplement;
+    go.disabled = true;
+    go.textContent = "Manager 重新规划中…";
+    liveClarifySession(session.taskId, answers)
+      .then(({ taskId, plan: nextPlan }) => {
+        setLiveSession({ taskId, plan: nextPlan });
+        navigate(nextPlan && nextPlan.needsClarification ? "clarify" : "war");
+      })
+      .catch((err) => {
+        go.disabled = false;
+        go.textContent = "🚀 确认并提交澄清";
+        toast(`澄清提交失败：${err && err.message ? err.message : "后端不可用"}`);
+      });
+  });
+  right.appendChild(go);
+
+  const edit = el("button", "btn-ghost", "‹ 返回大厅重新描述");
+  edit.style.cssText = "width:100%;margin-top:8px";
+  edit.addEventListener("click", () => navigate("hall"));
+  right.appendChild(edit);
+
+  layout.append(left, right);
+  return layout;
+}
+
+// ---------------------------------------------------------------------------
+// live: war room — consume real SSE execution stream (界面 03 · 实时)
+// ---------------------------------------------------------------------------
+function pageWarRoomLive() {
+  const session = liveSession;
+  if (!session.taskId) {
+    const wrap = el("div", "panel");
+    wrap.appendChild(el("div", "panel-title", "多 Agent 作战室 · 实时"));
+    const box = stateBox("empty", "尚无进行中的任务", "请先在投研大厅提交研究请求。");
+    const back = el("button", "btn btn-primary", "‹ 返回大厅");
+    back.style.marginTop = "10px";
+    back.addEventListener("click", () => navigate("hall"));
+    box.appendChild(back);
+    wrap.appendChild(box);
+    return wrap;
+  }
+
+  const plan = session.plan;
+  const steps = (plan && plan.steps) || [];
+  const wrap = el("div");
+
+  // ---- head ----
+  const head = el("div", "war-head");
+  head.appendChild(el("h1", "", "🛰 多 Agent 作战室 · 实时"));
+  head.appendChild(el("span", "sub", "真实 SSE 执行流 · 专家自主协作"));
+  const task = el("div", "war-task");
+  task.appendChild(el("span", "wt-name", esc(plan && plan.goal ? plan.goal : session.prompt)));
+  const badge = el("span", "badge running", '<span class="dot"></span>执行中');
+  task.appendChild(badge);
+  head.appendChild(task);
+  wrap.appendChild(head);
+
+  const grid = el("div", "war-grid");
+
+  // ---- LEFT: real DAG built from plan.steps (layered by dependency depth) ----
+  const leftCol = el("div", "panel");
+  leftCol.appendChild(el("div", "panel-title", "任务执行流"));
+  const dag = el("div", "dag-wrap");
+  const byId = {};
+  steps.forEach((s) => { byId[s.id] = s; });
+  const depth = {};
+  const computeDepth = (id, seen) => {
+    if (depth[id] != null) return depth[id];
+    const s = byId[id];
+    if (!s || !s.dependsOn.length || seen.has(id)) { depth[id] = 0; return 0; }
+    seen.add(id);
+    depth[id] = 1 + Math.max(...s.dependsOn.map((p) => computeDepth(p, seen)));
+    return depth[id];
+  };
+  steps.forEach((s) => computeDepth(s.id, new Set()));
+  const layers = {};
+  steps.forEach((s) => { (layers[depth[s.id]] = layers[depth[s.id]] || []).push(s); });
+  const layerKeys = Object.keys(layers).map(Number).sort((a, b) => a - b);
+  const maxDepth = layerKeys.length ? layerKeys[layerKeys.length - 1] : 0;
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("preserveAspectRatio", "none");
+  const pos = {};
+  layerKeys.forEach((d) => {
+    const row = layers[d];
+    const y = maxDepth === 0 ? 50 : 12 + (d / maxDepth) * 76;
+    row.forEach((s, i) => { pos[s.id] = [((i + 1) / (row.length + 1)) * 100, y]; });
+  });
+  const edgeEls = {};
+  steps.forEach((s) => {
+    s.dependsOn.forEach((p) => {
+      if (!pos[p] || !pos[s.id]) return;
+      const line = document.createElementNS(svgNS, "line");
+      line.setAttribute("x1", pos[p][0]); line.setAttribute("y1", pos[p][1]);
+      line.setAttribute("x2", pos[s.id][0]); line.setAttribute("y2", pos[s.id][1]);
+      line.setAttribute("stroke", "#1d3a5c");
+      line.setAttribute("stroke-width", "0.5");
+      svg.appendChild(line);
+      edgeEls[`${p}-${s.id}`] = line;
+    });
+  });
+  dag.appendChild(svg);
+  const nodeEls = {};
+  steps.forEach((s) => {
+    const [x, y] = pos[s.id] || [50, 50];
+    const node = el("button", "dag-node st-idle");
+    node.style.left = `${x}%`;
+    node.style.top = `${y}%`;
+    node.appendChild(avatar(s.agent, 34, "dn-ava"));
+    node.appendChild(el("strong", "", esc(s.agent)));
+    node.appendChild(el("small", "", esc(s.role || "")));
+    node.appendChild(el("span", "badge off dn-badge", '<span class="dot"></span>待命'));
+    node.title = s.objective || "";
+    node.addEventListener("click", () => navigate("experts"));
+    nodeEls[s.id] = node;
+    dag.appendChild(node);
+  });
+  if (!steps.length) dag.appendChild(stateBox("empty", "该计划无可执行步骤"));
+  leftCol.appendChild(dag);
+  grid.appendChild(leftCol);
+
+  // ---- CENTER: live stage + progress ----
+  const centerCol = el("div");
+  const stagePanel = el("div", "panel");
+  stagePanel.appendChild(el("div", "panel-title", "作战室实时画面 <span class='title-extra'>专家协作执行中</span>"));
+  const stage = el("div", "office-stage");
+  const canvas = el("canvas");
+  stage.appendChild(canvas);
+  stagePanel.appendChild(stage);
+
+  const prog = el("div", "progress-row");
+  const pmain = el("div");
+  pmain.innerHTML = '<div style="font-size:12px;color:var(--text-2);margin-bottom:6px">整体进度 <b class="p-pct" style="color:var(--cyan)">0%</b></div><div class="pbar"><i style="width:0%"></i></div>';
+  prog.appendChild(pmain);
+  const pstats = {
+    done: el("div", "pstat", '<strong>0</strong><span>已完成</span>'),
+    working: el("div", "pstat", '<strong>0</strong><span>进行中</span>'),
+    logs: el("div", "pstat", '<strong>0</strong><span>日志</span>'),
+    elapsed: el("div", "pstat", '<strong>0s</strong><span>用时</span>'),
+  };
+  prog.append(pstats.done, pstats.working, pstats.logs, pstats.elapsed);
+  stagePanel.appendChild(prog);
+  centerCol.appendChild(stagePanel);
+  grid.appendChild(centerCol);
+
+  // ---- RIGHT: skills + logs ----
+  const rightCol = el("div");
+  const skillPanel = el("div", "panel");
+  skillPanel.appendChild(el("div", "panel-title", "Skill 调用"));
+  const skillList = el("div");
+  skillPanel.appendChild(skillList);
+  const skillEmpty = el("div", "op-note", "尚无 Skill 调用");
+  skillPanel.appendChild(skillEmpty);
+  rightCol.appendChild(skillPanel);
+
+  const logPanel = el("div", "panel");
+  logPanel.style.marginTop = "14px";
+  logPanel.appendChild(el("div", "panel-title", "实时日志"));
+  const logEl = el("div", "log-list");
+  logPanel.appendChild(logEl);
+  rightCol.appendChild(logPanel);
+  grid.appendChild(rightCol);
+
+  wrap.appendChild(grid);
+
+  // office scene from plan agents (only those with a pixel sprite sheet)
+  const planAgents = (plan && plan.agents && plan.agents.length)
+    ? plan.agents.filter((a) => SPRITE_MAP[a.id]).map((a) => ({ id: a.id, name: a.name, status: "working" }))
+    : AGENTS;
+  requestAnimationFrame(() => drawOfficeScene(canvas, planAgents.length ? planAgents : AGENTS));
+
+  // ---- engine state ----
+  const startedAt = Date.now();
+  const skillCounts = {};
+  const stepStatus = {};
+  let logCount = 0;
+  let reportId = null;
+
+  const elapsedTimer = setInterval(() => {
+    pstats.elapsed.querySelector("strong").textContent = `${Math.floor((Date.now() - startedAt) / 1000)}s`;
+  }, 1000);
+
+  const DAG_LABEL = { running: "执行中", done: "已完成", failed: "失败" };
+  const setNode = (stepId, status) => {
+    const node = nodeEls[stepId];
+    if (!node) return;
+    const cls = status === "done" ? "st-done" : status === "failed" ? "st-off" : "st-running";
+    node.className = `dag-node ${cls}`;
+    const b = node.querySelector(".dn-badge");
+    if (b) {
+      const bcls = status === "done" ? "done" : status === "failed" ? "off" : "running";
+      b.className = `badge ${bcls} dn-badge`;
+      b.innerHTML = `<span class="dot"></span>${DAG_LABEL[status] || status}`;
+    }
+    Object.entries(edgeEls).forEach(([key, ln]) => {
+      if (key.startsWith(`${stepId}-`) && (status === "running" || status === "done")) {
+        ln.setAttribute("stroke", "#22d3ee");
+        ln.setAttribute("stroke-width", "0.8");
+      }
+    });
+  };
+
+  const updateProgress = () => {
+    const total = steps.length || 1;
+    const done = Object.values(stepStatus).filter((v) => v === "done" || v === "failed").length;
+    const working = Object.values(stepStatus).filter((v) => v === "running").length;
+    const pct = Math.round((done / total) * 100);
+    pmain.querySelector(".p-pct").textContent = `${pct}%`;
+    pmain.querySelector(".pbar i").style.width = `${pct}%`;
+    pstats.done.querySelector("strong").textContent = String(done);
+    pstats.working.querySelector("strong").textContent = String(working);
+  };
+
+  const LOG_COLOR = { done: "var(--green)", fail: "var(--red)", run: "#60a5fa", skill: "var(--cyan)", tool: "var(--yellow)" };
+  const pushLog = (who, message, kind) => {
+    logCount++;
+    pstats.logs.querySelector("strong").textContent = String(logCount);
+    const line = el("div", "log-line");
+    line.innerHTML = `<span class="lt">${esc(nowClock())}</span><span class="la" style="color:${LOG_COLOR[kind] || "var(--text-2)"}">${esc(who || "system")}</span><span>${esc(message || "")}</span>`;
+    logEl.appendChild(line);
+    while (logEl.children.length > 60) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  const bumpSkill = (name) => {
+    if (!name) return;
+    skillCounts[name] = (skillCounts[name] || 0) + 1;
+    skillEmpty.style.display = "none";
+    let row = skillList.querySelector(`[data-skill="${window.CSS && CSS.escape ? CSS.escape(name) : name}"]`);
+    if (!row) {
+      row = el("div", "skill-row");
+      row.setAttribute("data-skill", name);
+      row.innerHTML = `<span>🧩</span><span>${esc(name)}</span><span class="sk-count">0</span>`;
+      skillList.appendChild(row);
+    }
+    row.querySelector(".sk-count").textContent = String(skillCounts[name]);
+  };
+
+  const handleEvent = (evt) => {
+    const meta = evt.metadata || {};
+    const agent = evt.agent || "";
+    const stepId = evt.step_id;
+    switch (evt.type) {
+      case "plan_created":
+        pushLog("manager", evt.message || "任务图已生成");
+        break;
+      case "step_started":
+        if (stepId) { stepStatus[stepId] = "running"; setNode(stepId, "running"); }
+        pushLog(agent, evt.message || "开始执行", "run");
+        break;
+      case "step_completed":
+        if (stepId) { stepStatus[stepId] = "done"; setNode(stepId, "done"); }
+        pushLog(agent, evt.message || "步骤完成", "done");
+        break;
+      case "step_failed":
+        if (stepId) { stepStatus[stepId] = "failed"; setNode(stepId, "failed"); }
+        pushLog(agent, evt.message || "步骤失败", "fail");
+        break;
+      case "skill_plan_created":
+        pushLog(agent, evt.message || "已创建内部 Skill Plan", "skill");
+        break;
+      case "skill_started":
+        bumpSkill(meta.skill_id);
+        pushLog(agent, evt.message || "调用 Skill", "skill");
+        break;
+      case "skill_completed":
+        pushLog(agent, evt.message || "Skill 完成", "skill");
+        break;
+      case "skill_failed":
+        pushLog(agent, evt.message || "Skill 失败", "fail");
+        break;
+      case "tool_called":
+        pushLog(agent, evt.message || `调用工具 ${meta.tool || ""}`, "tool");
+        break;
+      case "synthesis_started":
+        pushLog(agent || "report", evt.message || "正在整合结论…", "run");
+        break;
+      case "task_completed":
+        pushLog(agent || "system", evt.message || "任务执行完成", "done");
+        break;
+      default:
+        if (evt.message) pushLog(agent, evt.message);
+    }
+    updateProgress();
+  };
+
+  const src = openTaskStream(session.taskId, {
+    onEvent: handleEvent,
+    onAggregation: (data) => {
+      if (data && data.report_id) reportId = data.report_id;
+      pushLog("report", "聚合报告已生成", "done");
+    },
+    onDone: (data) => {
+      clearInterval(elapsedTimer);
+      badge.className = "badge online";
+      badge.innerHTML = '<span class="dot"></span>已完成';
+      updateProgress();
+      const finalReport = reportId || (data && data.report_id) || null;
+      pushLog("system", "任务结束，正在跳转报告…", "done");
+      setTimeout(() => { navigate("reports", finalReport); }, 900);
+    },
+    onError: (info) => {
+      clearInterval(elapsedTimer);
+      badge.className = "badge busy";
+      badge.innerHTML = '<span class="dot"></span>执行失败';
+      pushLog("system", (info && info.detail) || "任务执行失败", "fail");
+    },
+  });
+
+  registerTeardown(() => { clearInterval(elapsedTimer); try { src.close(); } catch (_) {} });
+
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
 // boot
 // ---------------------------------------------------------------------------
 function boot() {
@@ -2288,7 +2863,7 @@ function boot() {
     // live mode: probe the backend, then land on a page with real data.
     refreshServiceStatus().finally(() => {
       renderTopbar();
-      navigate("experts");
+      navigate("hall");
     });
   } else {
     // demo mode: land directly on the report follow-up view (matches design).

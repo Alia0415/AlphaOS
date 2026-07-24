@@ -74,6 +74,19 @@ export const api = {
   reportFollowup: (id, question) =>
     postJSON(`/api/reports/${encodeURIComponent(id)}/followup`, { question }),
 
+  // planning session / clarify (real Manager planning; consumes model quota)
+  createSession: (prompt) =>
+    postJSON("/api/tasks/sessions", { prompt }, { timeoutMs: 90000 }),
+  clarifySession: (taskId, answers) =>
+    postJSON(
+      `/api/tasks/${encodeURIComponent(taskId)}/clarify`,
+      { answers },
+      { timeoutMs: 90000 },
+    ),
+  // Absolute URL for the SSE execution stream (EventSource cannot use fetch).
+  streamUrl: (taskId) =>
+    apiBase() + `/api/tasks/${encodeURIComponent(taskId)}/stream`,
+
   // persistent local user profile
   userProfile: () => getJSON("/api/user-profile"),
   userProfileStatus: () => getJSON("/api/user-profile/status"),

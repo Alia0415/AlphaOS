@@ -132,3 +132,106 @@ export async function setExpertEnabled(id, enabled) {
 export async function submitReportFollowup(id, question) {
   return api.reportFollowup(id, question);
 }
+
+// ---- planning session + live execution ------------------------------------
+
+export const roleFor = (id) => presentationFor(id).role;
+
+// Normalise a raw ExecutionPlan into the shape the office pages render. All
+// fields are structural facts from the Manager plan; no research claims here.
+export function mapPlan(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  const selected = Array.isArray(plan.selected_agents) ? plan.selected_agents : [];
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  return {
+    goal: plan.goal || "",
+    intent: plan.intent || "",
+    complexity: plan.complexity || "",
+    needsClarification: plan.needs_clarification === true,
+    clarificationQuestion: plan.clarification_question || "",
+    clarificationOptions: Array.isArray(plan.clarification_options)
+      ? plan.clarification_options.map((g) => ({
+          key: g.key,
+          title: g.title || g.key,
+          hint: g.hint || "",
+          multi: g.multi === true,
+          items: Array.isArray(g.items) ? g.items : [],
+          def: g.default ?? null,
+        }))
+      : [],
+    agents: selected.map((s) => ({
+      id: s.agent,
+      name: s.agent,
+      role: roleFor(s.agent),
+      reason: s.reason || "",
+    })),
+    steps: steps.map((s) => ({
+      id: s.id,
+      agent: s.agent,
+      role: roleFor(s.agent),
+      objective: s.objective || "",
+      dependsOn: Array.isArray(s.depends_on) ? s.depends_on : [],
+      expectedOutput: s.expected_output || "",
+    })),
+    raw: plan,
+  };
+}
+
+export async function createSession(prompt) {
+  const res = await api.createSession(prompt);
+  return { taskId: res.task_id, plan: mapPlan(res.plan), rawPlan: res.plan };
+}
+
+export async function clarifySession(taskId, answers) {
+  const res = await api.clarifySession(taskId, answers);
+  return { taskId: res.task_id, plan: mapPlan(res.plan), rawPlan: res.plan };
+}
+
+// Open the Server-Sent-Events execution stream for a planned task. Returns the
+// EventSource so the caller can close it on teardown. Handlers:
+//   onEvent(evt)       — every ExecutionEvent (plan_created/step_*/skill_*/...)
+//   onAggregation(data)— the final aggregation payload (report_id, aggregation)
+//   onDone(data)       — terminal marker ({task_id, status})
+//   onError(info)      — stream error / connection drop
+export function openTaskStream(taskId, handlers = {}) {
+  const src = new EventSource(api.streamUrl(taskId));
+  let finished = false;
+  const finish = () => {
+    finished = true;
+    try { src.close(); } catch { /* already closed */ }
+  };
+
+  src.onmessage = (ev) => {
+    if (!ev.data) return;
+    let payload;
+    try { payload = JSON.parse(ev.data); } catch { return; }
+    handlers.onEvent && handlers.onEvent(payload);
+  };
+  src.addEventListener("aggregation", (ev) => {
+    let payload = {};
+    try { payload = JSON.parse(ev.data); } catch { /* keep empty */ }
+    handlers.onAggregation && handlers.onAggregation(payload);
+  });
+  src.addEventListener("done", (ev) => {
+    let payload = {};
+    try { payload = JSON.parse(ev.data); } catch { /* keep empty */ }
+    finish();
+    handlers.onDone && handlers.onDone(payload);
+  });
+  src.addEventListener("error", (ev) => {
+    // Backend explicitly signalled failure with a payload.
+    let payload = null;
+    try { payload = ev && ev.data ? JSON.parse(ev.data) : null; } catch { /* n/a */ }
+    finish();
+    handlers.onError && handlers.onError(payload || { detail: "任务执行失败" });
+  });
+  src.onerror = () => {
+    // Native transport error (only meaningful before a clean done/error).
+    if (finished) return;
+    if (src.readyState === EventSource.CLOSED) {
+      finish();
+      handlers.onError && handlers.onError({ detail: "与后端的实时连接已中断" });
+    }
+  };
+  return src;
+}
