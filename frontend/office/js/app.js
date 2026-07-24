@@ -715,36 +715,212 @@ function matchReply(report, question) {
 }
 
 // ---------------------------------------------------------------------------
-// page: hall (lightweight)
+// canvas office scene — top-down pixel office with agents at their desks
+// (static LIVE preview for the hall; the war room animates its own stage)
 // ---------------------------------------------------------------------------
+function drawOfficeScene(canvas, agents) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = 720, H = 300;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = "100%";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const seats = agents.slice(0, 6);
+
+  const paint = () => {
+    ctx.imageSmoothingEnabled = false;
+    // floor
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#0c1830");
+    g.addColorStop(1, "#0a1322");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    // floor grid
+    ctx.strokeStyle = "#12233c";
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= W; x += 48) { ctx.beginPath(); ctx.moveTo(x, 58); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 58; y <= H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    // back wall
+    ctx.fillStyle = "#0e1e34";
+    ctx.fillRect(0, 0, W, 58);
+    ctx.strokeStyle = "#16304f";
+    ctx.beginPath(); ctx.moveTo(0, 58); ctx.lineTo(W, 58); ctx.stroke();
+    ctx.fillStyle = "#22d3ee";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("◆ AlphaOS 投研办公室", 14, 36);
+
+    const cols = 3;
+    const gapX = W / cols;
+    seats.forEach((a, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cx = gapX * col + gapX / 2;
+      const cy = 116 + row * 104;
+      // desk
+      ctx.fillStyle = "#14304f";
+      ctx.beginPath(); ctx.roundRect(cx - 54, cy + 26, 108, 24, 6); ctx.fill();
+      ctx.fillStyle = "#0b1526";
+      ctx.beginPath(); ctx.roundRect(cx - 20, cy + 20, 40, 13, 3); ctx.fill();
+      ctx.fillStyle = a.status === "off" ? "#3a4a5f" : "#1e6b52";
+      ctx.fillRect(cx - 17, cy + 23, 34, 7);
+      // sprite (frame 0)
+      const sheet = SPRITE_MAP[a.id] || a.id;
+      const entry = spriteCache.get(sheet);
+      const size = 60;
+      if (entry && entry.ready) {
+        ctx.drawImage(entry.img, 0, 0, FRAME, FRAME, cx - size / 2, cy - size + 22, size, size);
+      } else {
+        ctx.fillStyle = "#13263f";
+        ctx.fillRect(cx - size / 2, cy - size + 22, size, size);
+      }
+      // status dot
+      const dot = { online: "#34d399", working: "#60a5fa", busy: "#f59e0b", running: "#60a5fa", off: "#5a6b80" }[a.status] || "#5a6b80";
+      ctx.fillStyle = dot;
+      ctx.beginPath(); ctx.arc(cx + 22, cy - 34, 4, 0, Math.PI * 2); ctx.fill();
+      // name tag
+      ctx.fillStyle = "rgba(10,22,40,0.82)";
+      ctx.beginPath(); ctx.roundRect(cx - 32, cy + 54, 64, 15, 4); ctx.fill();
+      ctx.fillStyle = "#9fc0e0";
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(a.name, cx, cy + 65);
+    });
+  };
+
+  seats.forEach((a) => {
+    const e = loadSprite(SPRITE_MAP[a.id] || a.id);
+    if (!e.ready) e.waiters.push(paint);
+  });
+  paint();
+}
+
+// ---------------------------------------------------------------------------
+// page: hall (投研大厅 · 界面 01)
+// ---------------------------------------------------------------------------
+let hallRecIdx = 0;
+
 function pageHall() {
   const wrap = el("div");
-  const panel = el("div", "panel");
-  panel.appendChild(el("div", "panel-title", "投研大厅 <span class='title-extra'>用最强的 AI 团队，做最专业的投资研究</span>"));
-  panel.appendChild(el("p", "", "<span style='color:var(--text-2)'>点击左侧「研究报告」查看《新能源行业投资机会研究报告》与报告后追问界面。</span>"));
+  wrap.appendChild(screenTitle("01", "投研大厅", "用最强的 AI 团队，做最专业的投资研究。"));
+
+  // ---- hero grid: ask box + LIVE office preview ----
+  const grid = el("div", "hall-grid");
+
+  const askPanel = el("div", "panel");
+  askPanel.appendChild(el("div", "panel-title", "今天想研究什么？ <span class='title-extra'>描述你的研究意向，Manager 会拆解并编排团队</span>"));
+  const askBox = el("div", "ask-box");
+  const ta = el("textarea");
+  ta.placeholder = "例如：分析特斯拉（TSLA）的基本面、自动驾驶与机器人业务，并给出估值与风险判断…";
+  askBox.appendChild(ta);
+  const foot = el("div", "ask-foot");
+  const count = el("span", "ask-count", "0 / 500");
+  ta.addEventListener("input", () => { count.textContent = `${ta.value.length} / 500`; });
+  const startBtn = el("button", "btn btn-primary", "🚀 开始研究");
+  startBtn.addEventListener("click", () => {
+    toast("Manager 正在澄清任务需求…（DEMO）");
+    navigate("clarify");
+  });
+  foot.append(count, startBtn);
+  askBox.appendChild(foot);
+  askPanel.appendChild(askBox);
+
+  // recommended tasks
+  const rec = el("div", "rec-row");
+  const recLabel = el("span", "rec-label", "💡 推荐任务");
+  rec.appendChild(recLabel);
+  RECOMMENDED_GROUPS[hallRecIdx % RECOMMENDED_GROUPS.length].forEach((t) => {
+    const chip = el("button", "chip", esc(t));
+    chip.addEventListener("click", () => { ta.value = t.replace(/^\S+\s/, ""); count.textContent = `${ta.value.length} / 500`; ta.focus(); });
+    rec.appendChild(chip);
+  });
+  const shuffle = el("button", "chip", "🔀 换一批");
+  shuffle.addEventListener("click", () => { hallRecIdx++; renderPage(); });
+  rec.appendChild(shuffle);
+  askPanel.appendChild(rec);
+  grid.appendChild(askPanel);
+
+  // LIVE office preview
+  const officePanel = el("div", "panel");
+  officePanel.appendChild(el("div", "panel-title", "投研办公室 <span class='title-extra'>点击进入作战室</span>"));
+  const preview = el("div", "office-preview");
+  const canvas = el("canvas");
+  preview.appendChild(canvas);
+  preview.appendChild(el("div", "live-tag", "<i></i>LIVE"));
+  preview.addEventListener("click", () => navigate("war"));
+  officePanel.appendChild(preview);
+  const ofeed = el("div", "office-feed");
+  ofeed.innerHTML = `<span class="dot"></span><span>${esc(OFFICE_FEED[0])}</span>`;
+  officePanel.appendChild(ofeed);
+  grid.appendChild(officePanel);
+  wrap.appendChild(grid);
+  requestAnimationFrame(() => drawOfficeScene(canvas, AGENTS));
+
+  // rotate the office feed line
+  let feedIdx = 0;
+  const feedTimer = setInterval(() => {
+    feedIdx = (feedIdx + 1) % OFFICE_FEED.length;
+    const span = ofeed.querySelector("span:last-child");
+    if (span) span.textContent = OFFICE_FEED[feedIdx];
+  }, 2600);
+  registerTeardown(() => clearInterval(feedTimer));
+
+  // ---- online experts ----
+  const expertPanel = el("div", "panel");
+  expertPanel.style.marginTop = "18px";
+  expertPanel.appendChild(el("div", "panel-title", `在线专家 <span class='title-extra'>${AGENTS.filter((a) => a.status !== "off").length} 位专家在线协作</span>`));
   const strip = el("div", "expert-strip");
-  strip.style.marginTop = "14px";
   AGENTS.forEach((a) => {
     const card = el("button", "expert-mini");
     card.appendChild(avatar(a.id, 56, "em-ava"));
     card.appendChild(el("strong", "", esc(a.name)));
     card.appendChild(el("div", "em-role", esc(a.role)));
     card.appendChild(el("span", `badge ${a.status}`, `<span class="dot"></span>${statusText(a.status)}`));
+    card.appendChild(el("div", "em-spec", esc(a.specialty)));
     card.addEventListener("click", () => navigate("experts"));
     strip.appendChild(card);
   });
-  panel.appendChild(strip);
-  wrap.appendChild(panel);
+  expertPanel.appendChild(strip);
+  wrap.appendChild(expertPanel);
 
-  const feedPanel = el("div", "panel");
-  feedPanel.style.marginTop = "14px";
-  feedPanel.appendChild(el("div", "panel-title", "实时动态"));
-  const feed = el("div", "log-list");
-  OFFICE_FEED.forEach((line) => {
-    feed.appendChild(el("div", "log-line", `<span class="lt">${nowClock()}</span><span>${esc(line)}</span>`));
+  // ---- overview stats + team radar ----
+  const bottom = el("div");
+  bottom.style.cssText = "display:grid;grid-template-columns:1.2fr 1fr;gap:18px;margin-top:18px";
+
+  const statPanel = el("div", "panel");
+  statPanel.appendChild(el("div", "panel-title", "系统概览"));
+  const cards = el("div", "stat-cards");
+  const online = AGENTS.filter((a) => a.status !== "off").length;
+  const skillTotal = AGENTS.reduce((s, a) => s + (a.skillCount || 0), 0);
+  [
+    { num: "3", label: "今日研究任务", sub: "含 1 个进行中", green: true },
+    { num: `${online}/${AGENTS.length}`, label: "在线专家", sub: "多线协作中" },
+    { num: `${skillTotal}`, label: "已装 Skill", sub: "覆盖全研究链路" },
+    { num: `${REPORTS.length}`, label: "已完成报告", sub: "可追问 / 导出" },
+    { num: "98%", label: "证据校验通过率", sub: "结论均可溯源", green: true },
+    { num: "5", label: "本月新增策略", sub: "策略库沉淀" },
+  ].forEach((s) => {
+    const c = el("button", "stat-card");
+    c.innerHTML = `<div class="sc-num${s.green ? " green" : ""}">${esc(s.num)}</div>
+      <div class="sc-label">${esc(s.label)}</div><div class="sc-sub">${esc(s.sub)}</div>`;
+    c.addEventListener("click", () => navigate("tasks"));
+    cards.appendChild(c);
   });
-  feedPanel.appendChild(feed);
-  wrap.appendChild(feedPanel);
+  statPanel.appendChild(cards);
+  bottom.appendChild(statPanel);
+
+  const radarPanel = el("div", "panel");
+  radarPanel.appendChild(el("div", "panel-title", "团队能力雷达"));
+  const rwrap = el("div");
+  rwrap.style.cssText = "display:grid;place-items:center;padding:8px 0";
+  const rcanvas = el("canvas");
+  rwrap.appendChild(rcanvas);
+  radarPanel.appendChild(rwrap);
+  bottom.appendChild(radarPanel);
+  wrap.appendChild(bottom);
+  requestAnimationFrame(() => drawRadar(rcanvas, TEAM_RADAR, 260));
+
   return wrap;
 }
 
