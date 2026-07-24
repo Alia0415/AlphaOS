@@ -9,7 +9,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-RESEARCH_DISCLAIMER = "本结果仅用于研究与演示，不构成投资建议、荐股或收益承诺。"
+RESEARCH_DISCLAIMER = (
+    "本结果仅用于量化投资研究与技术演示，基于指定数据范围、方法和假设生成。"
+    "历史数据、模型计算、因子排序和模拟结果均不代表未来表现，"
+    "不构成投资建议、证券推荐、收益承诺、交易指令或代客理财服务。"
+)
 
 
 class AgentId(str, Enum):
@@ -21,6 +25,19 @@ class AgentId(str, Enum):
     PORTFOLIO = "portfolio"
     MACRO = "macro"
     REPORT = "report"
+
+
+class ValidationStatus(str, Enum):
+    """How far the available evidence has actually been validated."""
+
+    RESEARCH_DRAFT = "research_draft"
+    COMPUTED_NOT_VALIDATED = "computed_not_validated"
+    HISTORICALLY_ANALYZED = "historically_analyzed"
+    HISTORICALLY_TESTED = "historically_tested"
+    OUT_OF_SAMPLE_TESTED = "out_of_sample_tested"
+    STRESS_TESTED = "stress_tested"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    UNAVAILABLE = "unavailable"
 
 
 class AgentSelection(BaseModel):
@@ -74,6 +91,9 @@ class ExecutionPlan(BaseModel):
 
     goal: str = Field(min_length=1)
     intent: str = Field(min_length=1)
+    task_type: str | None = None
+    expected_result_type: str | None = None
+    task_summary: str | None = None
     complexity: Literal["low", "medium", "high"]
     selected_agents: list[AgentSelection] = Field(default_factory=list)
     steps: list[PlanStep] = Field(default_factory=list, max_length=8)
@@ -167,10 +187,13 @@ class ResultBlock(BaseModel):
 
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     type: Literal[
+        "task_understanding",
+        "validation_summary",
         "finding_cards",
         "metric_cards",
         "comparison",
         "risk_list",
+        "assumption_list",
         "factor_list",
         "action_list",
         "limitations",
@@ -179,6 +202,7 @@ class ResultBlock(BaseModel):
         "narrative",
         "report",
         "data_scope",
+        "boundary_response",
     ]
     title: str = Field(min_length=1)
     description: str | None = None
@@ -213,6 +237,46 @@ class TechnicalEvidence(BaseModel):
     conflicts: list[str]
     missing_evidence: list[str]
     source_results: dict[str, ExpertResult]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TaskUnderstanding(BaseModel):
+    """What AlphaOS understood before any expert was selected."""
+
+    task_type: str
+    subject_type: str
+    subjects: list[str] = Field(default_factory=list)
+    research_goal: str
+    time_range: str | None = None
+    defaults_used: list[str] = Field(default_factory=list)
+    excluded_outputs: list[str] = Field(default_factory=list)
+
+
+class ValidationSummary(BaseModel):
+    """User-readable evidence maturity and claim boundary."""
+
+    status: ValidationStatus
+    label: str
+    explanation: str
+    supported_claims: list[str] = Field(default_factory=list)
+    unsupported_claims: list[str] = Field(default_factory=list)
+
+
+class ResultItem(BaseModel):
+    """A traceable user-facing fact, judgment, risk, or research action."""
+
+    text: str = Field(min_length=1)
+    source_steps: list[str] = Field(default_factory=list)
+    evidence_type: Literal[
+        "fact",
+        "judgment",
+        "assumption",
+        "risk",
+        "limitation",
+        "research_action",
+        "policy",
+    ]
+    title: str | None = None
 
 
 class AggregationResult(BaseModel):
@@ -223,6 +287,7 @@ class AggregationResult(BaseModel):
         "completed",
         "partially_completed",
         "needs_clarification",
+        "rejected",
         "failed",
     ]
     output_mode: Literal[
@@ -235,10 +300,33 @@ class AggregationResult(BaseModel):
         "clarification",
         "failure",
     ]
+    result_type: Literal[
+        "personal_investment_decision",
+        "market_research",
+        "company_research",
+        "factor_research",
+        "historical_analysis",
+        "risk_review",
+        "comparison",
+        "formal_report",
+        "boundary_response",
+        "clarification",
+        "failure",
+    ]
+    task_understanding: TaskUnderstanding
+    validation: ValidationSummary
     direct_answer: DirectAnswer
+    key_findings: list[ResultItem] = Field(default_factory=list)
+    evidence_summary: list[ResultItem] = Field(default_factory=list)
+    assumptions: list[ResultItem] = Field(default_factory=list)
+    risks: list[ResultItem] = Field(default_factory=list)
+    limitations: list[ResultItem] = Field(default_factory=list)
+    data_scope: list[dict[str, Any]] = Field(default_factory=list)
+    next_research_steps: list[ResultItem] = Field(default_factory=list)
     content_blocks: list[ResultBlock]
     execution_summary: ExecutionSummary | None = None
     technical_evidence: TechnicalEvidence | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     disclaimer: str = RESEARCH_DISCLAIMER
 
 
@@ -246,6 +334,8 @@ class ExecutionEvent(BaseModel):
     """Ordered, frontend-ready orchestration event."""
 
     type: Literal[
+        "policy_checked",
+        "task_interpreted",
         "plan_created",
         "clarification_required",
         "step_started",
@@ -256,7 +346,9 @@ class ExecutionEvent(BaseModel):
         "skill_failed",
         "step_completed",
         "step_failed",
+        "evidence_validated",
         "synthesis_started",
+        "result_policy_checked",
         "task_completed",
     ]
     step_id: str | None = None
@@ -271,7 +363,7 @@ class ExecutionEvent(BaseModel):
 class TaskExecutionResponse(BaseModel):
     """Complete response returned by ``POST /api/tasks``."""
 
-    plan: ExecutionPlan
+    plan: ExecutionPlan | None
     events: list[ExecutionEvent]
     results: dict[str, ExpertResult]
     aggregation: AggregationResult

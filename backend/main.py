@@ -25,7 +25,11 @@ from backend.core.contracts import (
     RESEARCH_DISCLAIMER,
     TaskExecutionResponse,
 )
+from backend.core.evidence_validator import EvidenceValidator
+from backend.core.policy_gate import PolicyGate
 from backend.core.result_aggregator import ResultAggregator
+from backend.core.result_policy_checker import ResultPolicyChecker
+from backend.core.task_interpreter import TaskInterpreter
 from backend.core.workflow_executor import WorkflowExecutor
 from backend.services.pandadata_client import (
     PandaDataClient,
@@ -45,6 +49,10 @@ router = RouterAgent()
 manager = ManagerAgent()
 workflow_executor = WorkflowExecutor()
 result_aggregator = ResultAggregator()
+policy_gate = PolicyGate()
+task_interpreter = TaskInterpreter()
+evidence_validator = EvidenceValidator()
+result_policy_checker = ResultPolicyChecker()
 
 
 class RouteRequest(BaseModel):
@@ -132,7 +140,87 @@ async def plan_request(request: RouteRequest) -> ExecutionPlan:
 async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
     started_at = perf_counter()
     try:
-        plan = await run_in_threadpool(manager.create_plan, request.prompt)
+        policy = policy_gate.evaluate(request.prompt)
+        if not policy.allowed:
+            aggregation = result_policy_checker.check(
+                result_aggregator.build_boundary_response(request.prompt, policy)
+            )
+            events = [
+                ExecutionEvent(
+                    type="policy_checked",
+                    message="AlphaOS 已完成请求边界判断。",
+                    metadata={
+                        "decision": policy.decision,
+                        "allowed": False,
+                        "policy_tags": policy.policy_tags,
+                    },
+                ),
+                ExecutionEvent(
+                    type="result_policy_checked",
+                    message="AlphaOS 已完成最终结果合规检查。",
+                    metadata={"policy_rewrite": aggregation.metadata["policy_rewrite"]},
+                ),
+                ExecutionEvent(
+                    type="task_completed",
+                    message="AlphaOS 已返回能力边界说明。",
+                    metadata={"completed_steps": 0, "failed_steps": 0},
+                ),
+            ]
+            return TaskExecutionResponse(
+                plan=None,
+                events=events,
+                results={},
+                aggregation=aggregation,
+                final_answer=(
+                    f"{aggregation.direct_answer.headline}\n\n"
+                    f"{aggregation.direct_answer.explanation}"
+                ),
+                duration_ms=max(
+                    0,
+                    round((perf_counter() - started_at) * 1000),
+                ),
+                disclaimer=RESEARCH_DISCLAIMER,
+            )
+
+        task_spec = task_interpreter.interpret(request.prompt, policy)
+        if task_spec.execution_decision == "clarify":
+            aggregation = result_policy_checker.check(
+                result_aggregator.build_clarification_response(task_spec)
+            )
+            events = [
+                ExecutionEvent(
+                    type="clarification_required",
+                    message=task_spec.clarification_question
+                    or "任务需要补充关键信息。",
+                    metadata={"missing_fields": task_spec.missing_fields},
+                ),
+                ExecutionEvent(
+                    type="task_completed",
+                    message="AlphaOS 已返回澄清请求。",
+                    metadata={"completed_steps": 0, "failed_steps": 0},
+                ),
+            ]
+            return TaskExecutionResponse(
+                plan=None,
+                events=events,
+                results={},
+                aggregation=aggregation,
+                final_answer=(
+                    f"{aggregation.direct_answer.headline}\n\n"
+                    f"{aggregation.direct_answer.explanation}"
+                ),
+                duration_ms=max(
+                    0,
+                    round((perf_counter() - started_at) * 1000),
+                ),
+                disclaimer=RESEARCH_DISCLAIMER,
+            )
+
+        plan = await run_in_threadpool(
+            manager.create_plan,
+            task_spec,
+            request.prompt,
+        )
         events = [
             ExecutionEvent(
                 type="plan_created",
@@ -156,6 +244,17 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
                 )
             )
             results = {}
+            clarification_spec = task_spec.model_copy(
+                update={
+                    "execution_decision": "clarify",
+                    "clarification_question": plan.clarification_question,
+                }
+            )
+            aggregation = result_policy_checker.check(
+                result_aggregator.build_clarification_response(
+                    clarification_spec
+                )
+            )
         else:
             execution_events, results = await run_in_threadpool(
                 workflow_executor.execute,
@@ -170,12 +269,22 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
                     metadata={"component": "result_aggregator"},
                 )
             )
-        aggregation = await run_in_threadpool(
-            result_aggregator.aggregate,
-            request.prompt,
-            plan,
-            results,
-        )
+            evidence_validation = await run_in_threadpool(
+                evidence_validator.validate,
+                task_spec,
+                plan,
+                results,
+            )
+            aggregation = await run_in_threadpool(
+                result_aggregator.aggregate,
+                task_spec,
+                plan,
+                evidence_validation,
+            )
+            aggregation = await run_in_threadpool(
+                result_policy_checker.check,
+                aggregation,
+            )
         final_answer = (
             f"{aggregation.direct_answer.headline}\n\n"
             f"{aggregation.direct_answer.explanation}"
