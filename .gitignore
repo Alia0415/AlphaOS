@@ -17,3 +17,6 @@ logs/
 htmlcov/
 smoke-artifacts/
 .tmp-*.png
+alphaos.db
+alphaos.db-wal
+alphaos.db-shm

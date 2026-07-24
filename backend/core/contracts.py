@@ -69,6 +69,17 @@ class PlanStep(BaseModel):
         return values
 
 
+class ClarificationGroup(BaseModel):
+    """One structured clarification question the Manager can ask the user."""
+
+    key: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    title: str = Field(min_length=1)
+    hint: str | None = None
+    multi: bool = False
+    items: list[str] = Field(default_factory=list)
+    default: str | None = None
+
+
 class ExecutionPlan(BaseModel):
     """Validated task graph generated dynamically by the Manager Agent."""
 
@@ -79,6 +90,7 @@ class ExecutionPlan(BaseModel):
     steps: list[PlanStep] = Field(default_factory=list, max_length=8)
     needs_clarification: bool = False
     clarification_question: str | None = None
+    clarification_options: list[ClarificationGroup] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def clarification_is_actionable(self) -> "ExecutionPlan":
@@ -278,3 +290,108 @@ class TaskExecutionResponse(BaseModel):
     final_answer: str
     duration_ms: int = Field(ge=0)
     disclaimer: str = RESEARCH_DISCLAIMER
+
+
+class CompletenessMetric(BaseModel):
+    """Evidence-derived execution completeness — never a quality judgement."""
+
+    planned_steps: int = Field(ge=0)
+    completed_steps: int = Field(ge=0)
+    failed_steps: int = Field(ge=0)
+    blocked_steps: int = Field(ge=0)
+    completion_ratio: float = Field(ge=0.0, le=1.0)
+    evidence_coverage_ratio: float = Field(ge=0.0, le=1.0)
+    validation_summary: dict[str, int] = Field(default_factory=dict)
+    note: str = "执行完成度，非质量评分"
+
+
+class ExpertInfo(BaseModel):
+    """Read-only expert descriptor for the roster surface."""
+
+    id: str
+    name: str
+    description: str
+    enabled: bool
+    capabilities: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+
+
+class SkillInfo(BaseModel):
+    """Read-only skill descriptor exposed for transparency."""
+
+    id: str
+    name: str
+    description: str
+    mode: str
+    enabled: bool
+    owner_agents: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+
+
+class OverviewStats(BaseModel):
+    """Real counts derived from the registry and persisted tasks/reports."""
+
+    enabled_experts: int = Field(ge=0)
+    enabled_skills: int = Field(ge=0)
+    total_tasks: int = Field(ge=0)
+    completed_tasks: int = Field(ge=0)
+    report_count: int = Field(ge=0)
+    average_completion: float = Field(ge=0.0, le=1.0)
+
+
+class TaskSummary(BaseModel):
+    """Compact task row for list views."""
+
+    id: str
+    prompt: str
+    status: str
+    created_at: str
+    duration_ms: int | None = None
+
+
+class TaskDetail(BaseModel):
+    """Full persisted task including ordered events and any aggregation."""
+
+    id: str
+    prompt: str
+    status: str
+    created_at: str
+    plan: ExecutionPlan | None = None
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    aggregation: AggregationResult | None = None
+    final_answer: str | None = None
+    duration_ms: int | None = None
+
+
+class ReportSummary(BaseModel):
+    """Compact report row for list views."""
+
+    id: str
+    task_id: str
+    title: str
+    created_at: str
+    completeness: CompletenessMetric | None = None
+
+
+class FollowupAnswer(BaseModel):
+    """A persisted, evidence-bounded follow-up exchange on a report."""
+
+    id: str
+    report_id: str
+    role: str
+    text: str
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str
+
+
+class ReportDetail(BaseModel):
+    """Full persisted report with completeness, aggregation, and follow-ups."""
+
+    id: str
+    task_id: str
+    title: str
+    created_at: str
+    completeness: CompletenessMetric | None = None
+    aggregation: AggregationResult | None = None
+    followups: list[FollowupAnswer] = Field(default_factory=list)
