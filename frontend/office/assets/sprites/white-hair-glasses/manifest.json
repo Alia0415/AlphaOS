@@ -1,0 +1,113 @@
+{
+  "name": "white-hair-glasses",
+  "frame_count": 12,
+  "display_frame_size": [
+    256,
+    256
+  ],
+  "atlas": {
+    "file": "atlas.png",
+    "columns": 12,
+    "rows": 1,
+    "width": 3072,
+    "height": 256
+  },
+  "frames": [
+    {
+      "index": 0,
+      "file": "frames/frame-01.png",
+      "x": 0,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 1,
+      "file": "frames/frame-02.png",
+      "x": 256,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 2,
+      "file": "frames/frame-03.png",
+      "x": 512,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 3,
+      "file": "frames/frame-04.png",
+      "x": 768,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 4,
+      "file": "frames/frame-05.png",
+      "x": 1024,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 5,
+      "file": "frames/frame-06.png",
+      "x": 1280,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 6,
+      "file": "frames/frame-07.png",
+      "x": 1536,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 7,
+      "file": "frames/frame-08.png",
+      "x": 1792,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 8,
+      "file": "frames/frame-09.png",
+      "x": 2048,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 9,
+      "file": "frames/frame-10.png",
+      "x": 2304,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 10,
+      "file": "frames/frame-11.png",
+      "x": 2560,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    },
+    {
+      "index": 11,
+      "file": "frames/frame-12.png",
+      "x": 2816,
+      "y": 0,
+      "width": 256,
+      "height": 256
+    }
+  ]
+}
