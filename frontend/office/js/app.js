@@ -16,6 +16,86 @@ import {
   SKILL_FINAL_COUNTS,
   HISTORY_TASKS,
 } from "./mock.js";
+import {
+  isLive,
+  connectivity,
+  fetchExperts,
+  fetchSkills,
+  fetchOverview,
+  fetchTasks,
+  fetchReports,
+  fetchReport,
+  setExpertEnabled as liveSetExpertEnabled,
+  submitReportFollowup,
+} from "./live.js";
+
+// ---------------------------------------------------------------------------
+// mode (demo | live) — demo is the default showcase; live binds read-only
+// pages to the real backend. Task execution / planning stay demo until ARK
+// credentials are configured (later phase).
+// ---------------------------------------------------------------------------
+let liveStatus = { online: false, healthy: false, pandadata: null };
+
+function setMode(mode) {
+  if (store.state.mode === mode) return;
+  store.set({ mode });
+  toast(mode === "live" ? "已切换到实时数据模式" : "已切换到演示模式");
+  refreshServiceStatus().finally(() => {
+    renderTopbar();
+    renderStatusbar();
+    // land somewhere with guaranteed content for the active mode
+    navigate(mode === "live" ? "experts" : "reports", mode === "live" ? null : REPORTS[0].id);
+  });
+}
+
+async function refreshServiceStatus() {
+  if (!isLive()) {
+    liveStatus = { online: false, healthy: false, pandadata: null };
+    return liveStatus;
+  }
+  liveStatus = await connectivity();
+  return liveStatus;
+}
+
+// Standard empty / error / loading states for live read-only pages.
+function stateBox(kind, title, sub) {
+  const box = el("div", "soon-wrap");
+  const ico = kind === "error" ? "⚠" : kind === "empty" ? "🗂" : "⏳";
+  box.appendChild(el("div", "sw-ico", ico));
+  box.appendChild(el("h2", "", esc(title)));
+  if (sub) box.appendChild(el("p", "", esc(sub)));
+  return box;
+}
+
+// Render an async live page: show a loader, then swap in real content, or an
+// error state (with the reason) if the backend is unreachable.
+function renderLive(host, loader, builder) {
+  host.innerHTML = "";
+  host.appendChild(stateBox("loading", "正在从后端加载实时数据…"));
+  loader()
+    .then((data) => {
+      host.innerHTML = "";
+      host.appendChild(builder(data));
+    })
+    .catch((err) => {
+      host.innerHTML = "";
+      const box = stateBox(
+        "error",
+        "无法连接后端 API",
+        "请确认后端已启动（uvicorn backend.main:app）。" + (err && err.message ? ` [${err.message}]` : ""),
+      );
+      const retry = el("button", "btn btn-primary", "重试");
+      retry.addEventListener("click", () => renderLive(host, loader, builder));
+      const back = el("button", "btn-ghost", "切回演示模式");
+      back.addEventListener("click", () => setMode("demo"));
+      const row = el("div", "");
+      row.style.cssText = "display:flex;gap:8px;justify-content:center;margin-top:10px";
+      row.append(retry, back);
+      box.appendChild(row);
+      host.appendChild(box);
+    });
+  return host;
+}
 
 // ---------------------------------------------------------------------------
 // tiny DOM helpers
@@ -170,19 +250,43 @@ function renderSidebar() {
   });
   side.appendChild(nav);
 
-  side.appendChild(el("div", "sidebar-foot", "AlphaOS v0.3 · Demo"));
+  side.appendChild(el("div", "sidebar-foot", `AlphaOS v0.4 · ${isLive() ? "实时数据" : "演示模式"}`));
 }
 
 function renderTopbar() {
   const bar = $("#topbar");
   bar.innerHTML = "";
 
-  const status = el("span", "pill", '<span class="dot ok"></span>系统状态：<strong style="color:var(--green)">正常运行</strong>');
-  const engine = el("span", "pill", "🧠 模型引擎：GPT-4o");
-  const data = el("span", "pill", '📡 数据源：实时已连接 <span class="dot ok"></span>');
-  bar.append(status, engine, data);
+  if (isLive()) {
+    const ok = liveStatus.healthy;
+    const status = el(
+      "span",
+      "pill",
+      `<span class="dot ${ok ? "ok" : "warn"}"></span>后端 API：<strong style="color:var(--${ok ? "green" : "yellow"})">${ok ? "已连接" : "连接中/离线"}</strong>`,
+    );
+    const pd = liveStatus.pandadata || {};
+    const pdReady = pd.configured || pd.ready || pd.status === "ok";
+    const data = el(
+      "span",
+      "pill",
+      `📡 PandaData：${pdReady ? '已配置 <span class="dot ok"></span>' : '未配置 <span class="dot warn"></span>'}`,
+    );
+    bar.append(status, data);
+  } else {
+    const status = el("span", "pill", '<span class="dot ok"></span>系统状态：<strong style="color:var(--green)">正常运行</strong>');
+    const engine = el("span", "pill", "🧠 模型引擎：GPT-4o（DEMO）");
+    const data = el("span", "pill", '📡 数据源：演示数据 <span class="dot ok"></span>');
+    bar.append(status, engine, data);
+  }
 
   bar.appendChild(el("div", "topbar-spacer"));
+
+  // demo / live mode toggle
+  const live = isLive();
+  const modeBtn = el("button", "pill", `${live ? "🟢 实时数据" : "🧪 演示模式"} · 点击切换`);
+  modeBtn.title = live ? "当前使用后端真实只读数据" : "当前使用本地演示数据";
+  modeBtn.addEventListener("click", () => setMode(live ? "demo" : "live"));
+  bar.append(modeBtn);
 
   const history = el("button", "pill", "🕘 历史任务");
   history.addEventListener("click", () => navigate("tasks"));
@@ -379,9 +483,11 @@ function renderPage() {
   if (activeTeardown) { try { activeTeardown(); } catch (_) {} activeTeardown = null; }
   const page = $("#page");
   page.innerHTML = "";
+  const live = isLive();
   switch (currentRoute) {
     case "reports":
-      if (routeParam) page.appendChild(pageReportDetail(routeParam));
+      if (live) page.appendChild(routeParam ? pageReportDetailLive(routeParam) : pageReportListLive());
+      else if (routeParam) page.appendChild(pageReportDetail(routeParam));
       else page.appendChild(pageReportList());
       break;
     case "hall":
@@ -394,10 +500,14 @@ function renderPage() {
       page.appendChild(pageWarRoom());
       break;
     case "experts":
-      page.appendChild(pageExperts());
+      page.appendChild(live ? pageExpertsLive() : pageExperts());
       break;
     case "tasks":
-      page.appendChild(pageTasks());
+      page.appendChild(live ? pageTasksLive() : pageTasks());
+      break;
+    case "skills":
+      if (live) page.appendChild(pageSkillsLive());
+      else page.appendChild(pageSoon(currentRoute));
       break;
     default:
       page.appendChild(pageSoon(currentRoute));
@@ -1755,6 +1865,405 @@ function pageSoon(route) {
   return wrap;
 }
 
+// ===========================================================================
+// LIVE pages — bound to the real backend read-only API (mode === "live")
+// ===========================================================================
+let liveExpertSel = null;
+let liveExpertTab = "cap";
+let liveExpertQuery = "";
+
+// ---- live: experts center -------------------------------------------------
+function pageExpertsLive() {
+  const host = el("div");
+  return renderLive(host, fetchExperts, (experts) => buildExpertsLive(experts));
+}
+
+function buildExpertsLive(experts) {
+  if (!liveExpertSel || !experts.some((e) => e.id === liveExpertSel)) {
+    liveExpertSel = experts.length ? experts[0].id : null;
+  }
+  const layout = el("div", "experts-layout");
+  const left = el("div", "panel");
+  left.appendChild(screenTitle("04", "专家中心 · 实时", "以下为后端 Registry 的真实专家能力、工具与技能授权，启停状态实时生效于 Manager 编排。"));
+
+  const toolbar = el("div", "experts-toolbar");
+  const search = el("input");
+  search.type = "text";
+  search.placeholder = "🔍 搜索专家或能力…";
+  search.value = liveExpertQuery;
+  const grid = el("div", "experts-grid");
+  search.addEventListener("input", () => { liveExpertQuery = search.value; drawGrid(); });
+  toolbar.append(search);
+  left.appendChild(toolbar);
+  left.appendChild(grid);
+
+  const foot = el("div", "experts-foot");
+  const enabledN = experts.filter((e) => e.enabled).length;
+  foot.innerHTML = `<span>共 ${experts.length} 位专家</span>
+    <span><span class="dot ok"></span>启用 ${enabledN}</span>
+    <span><span class="dot"></span>停用 ${experts.length - enabledN}</span>`;
+  left.appendChild(foot);
+  layout.appendChild(left);
+
+  const detail = el("div", "panel");
+  detail.id = "liveExpertDetail";
+  layout.appendChild(detail);
+
+  function drawGrid() {
+    grid.innerHTML = "";
+    const q = liveExpertQuery.trim();
+    experts
+      .filter((e) => {
+        if (!q) return true;
+        const hay = `${e.name} ${e.role} ${e.specialty} ${e.capabilities.join(" ")} ${e.skills.join(" ")}`;
+        return hay.includes(q);
+      })
+      .forEach((e) => {
+        const card = el("button", `expert-card${e.id === liveExpertSel ? " sel" : ""}${e.enabled ? "" : " off"}`);
+        card.appendChild(avatar(e.id, 64, "ec-ava"));
+        card.appendChild(el("strong", "", esc(e.name)));
+        card.appendChild(el("div", "", `<span style="color:var(--text-2);font-size:11.5px">${esc(e.role)}</span> <span class="badge ${e.status}"><span class="dot"></span>${statusText(e.status)}</span>`));
+        card.appendChild(el("div", "ec-spec", esc(e.specialty)));
+        card.appendChild(el("div", "ec-desc", `授权技能 <b style="color:var(--cyan)">${e.skills.length}</b> · 工具 <b style="color:var(--cyan)">${e.tools.length}</b>`));
+        card.appendChild(el("div", "ec-desc", esc(e.description)));
+        card.addEventListener("click", () => { liveExpertSel = e.id; liveExpertTab = "cap"; drawGrid(); drawDetail(); });
+        grid.appendChild(card);
+      });
+  }
+
+  function drawDetail() {
+    const panel = detail;
+    const e = experts.find((x) => x.id === liveExpertSel);
+    panel.innerHTML = "";
+    if (!e) { panel.appendChild(stateBox("empty", "暂无专家数据")); return; }
+
+    const head = el("div", "detail-head");
+    head.appendChild(avatar(e.id, 74, "pix-ava dh-ava"));
+    const hinfo = el("div");
+    hinfo.style.flex = "1";
+    hinfo.innerHTML = `<div style="font-size:20px;font-weight:700">${esc(e.name)}</div>
+      <div style="color:var(--text-2);font-size:12.5px">${esc(e.role)} <span class="badge ${e.status}"><span class="dot"></span>${statusText(e.status)}</span> <span class="badge">${e.id}</span></div>`;
+    head.appendChild(hinfo);
+    panel.appendChild(head);
+    panel.appendChild(el("p", "", `<span style="color:var(--text-2);line-height:1.7">${esc(e.description)}</span>`));
+
+    const tabs = el("div", "tabs");
+    [["cap", "能力"], ["tools", "工具"], ["skills", "授权技能"], ["config", "配置管理"]].forEach(([k, t]) => {
+      const tab = el("button", `tab${liveExpertTab === k ? " active" : ""}`, esc(t));
+      tab.addEventListener("click", () => { liveExpertTab = k; drawDetail(); });
+      tabs.appendChild(tab);
+    });
+    panel.appendChild(tabs);
+
+    const body = el("div");
+    panel.appendChild(body);
+
+    if (liveExpertTab === "cap") {
+      body.appendChild(el("div", "follow-sec-title", `能力标签 · ${e.capabilities.length} 项`));
+      if (e.capabilities.length) {
+        const tagwrap = el("div"); tagwrap.style.cssText = "display:flex;flex-wrap:wrap;gap:8px";
+        e.capabilities.forEach((c) => tagwrap.appendChild(el("span", "badge", esc(c))));
+        body.appendChild(tagwrap);
+      } else body.appendChild(el("div", "op-note", "该专家未声明能力标签。"));
+    } else if (liveExpertTab === "tools") {
+      body.appendChild(el("div", "follow-sec-title", `可用工具 · ${e.tools.length} 个`));
+      if (e.tools.length) e.tools.forEach((t) => {
+        const row = el("div", "skill-row");
+        row.innerHTML = `<span>🛠</span><span>${esc(t)}</span>`;
+        body.appendChild(row);
+      });
+      else body.appendChild(el("div", "op-note", "该专家未绑定外部工具。"));
+    } else if (liveExpertTab === "skills") {
+      body.appendChild(el("div", "follow-sec-title", `授权技能 · ${e.skills.length} 个`));
+      if (e.skills.length) e.skills.forEach((s) => {
+        const row = el("div", "skill-row");
+        row.innerHTML = `<span>🧩</span><span>${esc(s)}</span>`;
+        body.appendChild(row);
+      });
+      else body.appendChild(el("div", "op-note", "该专家未被授权任何 Skill。"));
+    } else if (liveExpertTab === "config") {
+      const isPortfolio = e.id === "portfolio";
+      const enable = el("div", "op-enable");
+      enable.innerHTML = `<div><strong>启用该专家</strong><div class="op-note">${isPortfolio ? "Portfolio 暂无运行实现，后端不可启用。" : "禁用后 Manager 将不会把该专家纳入任务编排（实时生效）。"}</div></div>`;
+      const sw = el("button", `switch${e.enabled ? " on" : ""}${isPortfolio ? " disabled" : ""}`);
+      sw.addEventListener("click", () => {
+        if (isPortfolio) { toast("Portfolio 专家暂不可启用"); return; }
+        const next = !e.enabled;
+        sw.classList.toggle("on", next);
+        liveSetExpertEnabled(e.id, next)
+          .then((info) => {
+            e.enabled = info.enabled;
+            e.status = info.enabled ? "online" : "off";
+            toast(`${e.name} 已${e.enabled ? "启用" : "停用"}`);
+            drawGrid();
+            drawDetail();
+          })
+          .catch((err) => {
+            sw.classList.toggle("on", e.enabled);
+            toast(`操作失败：${err && err.message ? err.message : "后端拒绝"}`);
+          });
+      });
+      enable.appendChild(sw);
+      body.appendChild(enable);
+    }
+  }
+
+  drawGrid();
+  drawDetail();
+  return layout;
+}
+
+// ---- live: skills market --------------------------------------------------
+function pageSkillsLive() {
+  const host = el("div");
+  return renderLive(host, fetchSkills, (skills) => {
+    const wrap = el("div", "panel");
+    wrap.appendChild(screenTitle("07", "Skills · 实时", "以下为后端 skill_registry 托管的运行时 Skill 真实清单（来源与状态由后端统一管理）。"));
+    if (!skills.length) { wrap.appendChild(stateBox("empty", "暂无已注册的运行时 Skill")); return wrap; }
+    const list = el("div", "report-list");
+    skills.forEach((s) => {
+      const item = el("div", "report-item");
+      item.style.cursor = "default";
+      item.appendChild(el("span", "ri-ico", s.mode === "executable" ? "⚙" : "📘"));
+      const modeLabel = s.mode === "executable" ? "可执行" : s.mode === "instruction" ? "指令式" : s.mode;
+      item.appendChild(el("div", "", `
+        <div style="font-weight:600">${esc(s.name)} <span class="badge ${s.enabled ? "online" : ""}"><span class="dot ${s.enabled ? "ok" : ""}"></span>${s.enabled ? "已启用" : "停用"}</span></div>
+        <div style="color:var(--text-2);font-size:12px;margin-top:3px">${esc(s.description)}</div>
+        <div style="color:var(--text-3);font-size:11px;margin-top:4px">${esc(s.id)} · ${esc(modeLabel)} · 归属 ${esc(s.owner_agents.join(" / ") || "-")}${s.capabilities.length ? " · 能力 " + esc(s.capabilities.join(", ")) : ""}</div>
+      `));
+      list.appendChild(item);
+    });
+    wrap.appendChild(list);
+    return wrap;
+  });
+}
+
+// ---- live: tasks center ---------------------------------------------------
+function pageTasksLive() {
+  const host = el("div");
+  return renderLive(host, fetchTasks, (tasks) => {
+    const wrap = el("div", "panel");
+    wrap.appendChild(el("div", "panel-title", "任务中心 <span class='title-extra'>实时任务记录</span>"));
+    if (!tasks.length) {
+      wrap.appendChild(stateBox("empty", "暂无任务记录", "任务执行需要配置 ARK 凭证并从大厅提交研究请求（下一阶段）。当前后端任务库为空。"));
+      return wrap;
+    }
+    const list = el("div", "task-list");
+    tasks.forEach((t) => {
+      const item = el("button", "task-item");
+      item.appendChild(el("span", "ri-ico", "📄"));
+      const dur = t.duration_ms != null ? ` · ${(t.duration_ms / 1000).toFixed(1)}s` : "";
+      item.appendChild(el("div", "", `<div class="ti-title">${esc(t.prompt.slice(0, 60) || t.id)}</div><div class="ti-sub">${esc(t.status)} · ${esc(t.created_at)}${esc(dur)}</div>`));
+      item.appendChild(el("span", "ti-go", "›"));
+      item.addEventListener("click", () => toast(`任务 ${t.id}（状态：${t.status}）`));
+      list.appendChild(item);
+    });
+    wrap.appendChild(list);
+    return wrap;
+  });
+}
+
+// ---- live: reports list ---------------------------------------------------
+function pageReportListLive() {
+  const host = el("div");
+  return renderLive(host, fetchReports, (reports) => {
+    const wrap = el("div");
+    const panel = el("div", "panel");
+    panel.appendChild(el("div", "panel-title", "研究报告 <span class='title-extra'>实时报告库</span>"));
+    if (!reports.length) {
+      panel.appendChild(stateBox("empty", "暂无已生成的研究报告", "报告在任务执行完成后由 Result Aggregator 落库（需 ARK 凭证，下一阶段）。当前后端报告库为空。"));
+      wrap.appendChild(panel);
+      return wrap;
+    }
+    const list = el("div", "report-list");
+    reports.forEach((r) => {
+      const item = el("button", "report-item");
+      item.appendChild(el("span", "ri-ico", "📄"));
+      const ratio = r.completeness ? Math.round((r.completeness.completion_ratio || 0) * 100) : null;
+      item.appendChild(el("div", "", `
+        <div style="font-weight:600">${esc(r.title)}</div>
+        <div style="color:var(--text-2);font-size:12px;margin-top:3px">${esc(r.id)} · ${esc(r.created_at)}</div>
+      `));
+      if (ratio != null) item.appendChild(el("div", "ri-score", `<strong>${ratio}%</strong><span style="color:var(--text-2);font-size:11px">完成度</span>`));
+      item.addEventListener("click", () => navigate("reports", r.id));
+      list.appendChild(item);
+    });
+    panel.appendChild(list);
+    wrap.appendChild(panel);
+    return wrap;
+  });
+}
+
+// ---- live: report detail + real evidence-bounded follow-up ----------------
+function pageReportDetailLive(reportId) {
+  const host = el("div");
+  return renderLive(host, () => fetchReport(reportId), (report) => {
+    const layout = el("div", "report-layout");
+    layout.appendChild(buildReportMainLive(report));
+    layout.appendChild(buildFollowPanelLive(report));
+    return layout;
+  });
+}
+
+function buildReportMainLive(report) {
+  const col = el("div");
+  const toolbar = el("div", "rpt-toolbar");
+  const back = el("button", "btn-ghost", "‹ 返回报告列表");
+  back.addEventListener("click", () => navigate("reports"));
+  toolbar.appendChild(back);
+  col.appendChild(toolbar);
+
+  const agg = report.aggregation || {};
+  const direct = agg.direct_answer || {};
+  const heroPanel = el("div", "panel");
+  heroPanel.appendChild(el("div", "panel-title", esc(report.title)));
+  heroPanel.appendChild(el("div", "op-note", `${esc(report.id)} · ${esc(report.created_at)}`));
+  if (report.completeness) {
+    const c = report.completeness;
+    const stats = el("div", "detail-stats");
+    stats.innerHTML = `
+      <div class="ds"><strong>${c.planned_steps}</strong><span>计划步骤</span></div>
+      <div class="ds"><strong style="color:var(--green)">${c.completed_steps}</strong><span>已完成</span></div>
+      <div class="ds"><strong style="color:var(--yellow)">${c.failed_steps + c.blocked_steps}</strong><span>失败/受阻</span></div>
+      <div class="ds"><strong>${Math.round((c.completion_ratio || 0) * 100)}%</strong><span>完成度</span></div>`;
+    heroPanel.appendChild(stats);
+  }
+  col.appendChild(heroPanel);
+
+  if (direct.headline) {
+    const dp = el("div", "panel");
+    dp.appendChild(el("div", "follow-sec-title", "核心结论"));
+    dp.appendChild(el("h2", "", esc(direct.headline)));
+    if (direct.explanation) dp.appendChild(el("p", "", `<span style="color:var(--text-2);line-height:1.7">${esc(direct.explanation)}</span>`));
+    col.appendChild(dp);
+  }
+
+  const blocks = Array.isArray(agg.content_blocks) ? agg.content_blocks : [];
+  blocks.forEach((b) => {
+    const bp = el("div", "panel");
+    bp.appendChild(el("div", "follow-sec-title", esc(b.title || b.type || "内容块")));
+    if (b.description) bp.appendChild(el("p", "", `<span style="color:var(--text-2);line-height:1.7">${esc(b.description)}</span>`));
+    bp.appendChild(renderBlockData(b.data));
+    col.appendChild(bp);
+  });
+
+  if (agg.disclaimer) col.appendChild(el("div", "op-note", esc(agg.disclaimer)));
+  return col;
+}
+
+// Generic, bounded renderer for a content block's `data` — no fixed schema.
+function renderBlockData(data) {
+  const wrap = el("div");
+  const walk = (value, into, depth) => {
+    if (depth > 3) return;
+    if (value == null) return;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      into.appendChild(el("div", "skill-row", `<span>•</span><span>${esc(String(value))}</span>`));
+    } else if (Array.isArray(value)) {
+      value.slice(0, 20).forEach((item) => walk(item, into, depth + 1));
+    } else if (typeof value === "object") {
+      Object.entries(value).slice(0, 20).forEach(([k, v]) => {
+        if (typeof v === "object" && v !== null) {
+          into.appendChild(el("div", "follow-sec-title", esc(k)));
+          walk(v, into, depth + 1);
+        } else {
+          into.appendChild(el("div", "skill-row", `<span style="color:var(--text-3)">${esc(k)}</span><span>${esc(String(v))}</span>`));
+        }
+      });
+    }
+  };
+  walk(data, wrap, 0);
+  return wrap;
+}
+
+function buildFollowPanelLive(report) {
+  const panel = el("div", "panel follow-panel");
+  const head = el("div", "follow-head");
+  head.appendChild(avatar("manager", 46, "fh-ava"));
+  const who = el("div", "fh-who");
+  who.appendChild(el("strong", "", "报告内证据检索"));
+  who.appendChild(el("p", "", "追问将在后端对报告证据做确定性检索，不调用模型、不产生新分析。"));
+  who.appendChild(el("span", "badge online", '<span class="dot"></span>实时'));
+  head.appendChild(who);
+  panel.appendChild(head);
+
+  panel.appendChild(el("div", "follow-sec-title", "对话记录"));
+  const scroll = el("div", "follow-scroll");
+  scroll.id = "liveFollowScroll";
+  panel.appendChild(scroll);
+
+  const seed = [{ role: "sys", text: `报告《${report.title}》已生成`, time: "" }];
+  (report.followups || []).forEach((f) => {
+    seed.push({ role: f.role === "user" ? "me" : "bot", text: f.text, time: (f.created_at || "").slice(11, 19), evidence: f.evidence });
+  });
+  seed.forEach((m) => scroll.appendChild(renderLiveMessage(m)));
+
+  const inputBar = el("div", "chat-inputbar");
+  const input = el("input");
+  input.type = "text";
+  input.placeholder = "输入问题，检索报告证据…";
+  const send = el("button", "btn btn-primary", "➤");
+  const fire = () => {
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = "";
+    submitLiveFollowup(report, q, scroll);
+  };
+  send.addEventListener("click", fire);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") fire(); });
+  inputBar.append(input, send);
+  panel.appendChild(inputBar);
+
+  requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
+  return panel;
+}
+
+function renderLiveMessage(m) {
+  if (m.role === "sys") {
+    return el("div", "msg", `
+      <div class="m-avatar" style="display:grid;place-items:center;color:var(--green)">✓</div>
+      <div class="m-body"><div class="m-meta"><span>系统</span><span>${esc(m.time || "")}</span></div>
+      <div class="m-bubble" style="color:var(--text-2)">${esc(m.text)}</div></div>`);
+  }
+  const me = m.role === "me";
+  const node = el("div", `msg${me ? " me" : ""}`);
+  const ava = el("div", "m-avatar");
+  ava.appendChild(avatar(me ? "user" : "manager", 38));
+  const body = el("div", "m-body");
+  body.appendChild(el("div", "m-meta", `<span>${me ? "你" : "Manager"}</span><span>${esc(m.time || "")}</span>`));
+  body.appendChild(el("div", "m-bubble", esc(m.text)));
+  if (m.evidence && m.evidence.length) {
+    const ev = el("div", "op-note");
+    ev.style.marginTop = "6px";
+    ev.innerHTML = m.evidence.map((e) => `<div>· <b>${esc(e.source || "证据")}</b>：${esc(String(e.text || "").slice(0, 160))}</div>`).join("");
+    body.appendChild(ev);
+  }
+  node.append(ava, body);
+  return node;
+}
+
+function submitLiveFollowup(report, question, scroll) {
+  scroll.appendChild(renderLiveMessage({ role: "me", text: question, time: nowClock() }));
+  scroll.scrollTop = scroll.scrollHeight;
+  const typing = el("div", "msg");
+  const ava = el("div", "m-avatar");
+  ava.appendChild(avatar("manager", 38));
+  typing.append(ava, el("div", "m-body", '<div class="m-bubble"><span class="typing-dots"><i></i><i></i><i></i></span></div>'));
+  scroll.appendChild(typing);
+  scroll.scrollTop = scroll.scrollHeight;
+  submitReportFollowup(report.id, question)
+    .then((ans) => {
+      typing.remove();
+      scroll.appendChild(renderLiveMessage({ role: "bot", text: ans.text, time: (ans.created_at || "").slice(11, 19), evidence: ans.evidence }));
+      scroll.scrollTop = scroll.scrollHeight;
+    })
+    .catch((err) => {
+      typing.remove();
+      scroll.appendChild(renderLiveMessage({ role: "bot", text: `检索失败：${err && err.message ? err.message : "后端不可用"}`, time: nowClock() }));
+      scroll.scrollTop = scroll.scrollHeight;
+    });
+}
+
 // ---------------------------------------------------------------------------
 // boot
 // ---------------------------------------------------------------------------
@@ -1765,8 +2274,16 @@ function boot() {
   // expose the router so hall hero / LIVE-office previews can jump into the
   // clarify + war-room sub-flows (which have no top-level nav entry).
   window.__navigate = navigate;
-  // land directly on the report follow-up view (matches the design)
-  navigate("reports", REPORTS[0].id);
+  if (isLive()) {
+    // live mode: probe the backend, then land on a page with real data.
+    refreshServiceStatus().finally(() => {
+      renderTopbar();
+      navigate("experts");
+    });
+  } else {
+    // demo mode: land directly on the report follow-up view (matches design).
+    navigate("reports", REPORTS[0].id);
+  }
   setInterval(renderStatusbar, 30_000);
 }
 
