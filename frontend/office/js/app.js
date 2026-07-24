@@ -753,6 +753,185 @@ function statusText(s) {
 }
 
 // ---------------------------------------------------------------------------
+// page: clarify (界面 02 — Manager 任务澄清)
+// ---------------------------------------------------------------------------
+const clarifySel = {};
+CLARIFY_GROUPS.forEach((g) => { clarifySel[g.key] = new Set(g.def || []); });
+const CLARIFY_TASK = { object: "特斯拉（TSLA）", type: "公司深度研究", experts: 5 };
+
+function pageClarify() {
+  const layout = el("div", "chat-layout");
+
+  // ---- left: Manager conversation ----
+  const left = el("div", "panel chat-col");
+  left.appendChild(screenTitle("02", "任务澄清", "Manager 正在与你确认关键研究口径，以便精准编排专家团队。"));
+
+  const head = el("div", "chat-head");
+  head.appendChild(avatar("manager", 46, "pix-ava"));
+  const who = el("div", "who");
+  who.innerHTML = "<strong>Manager · 研究管理员</strong><small>正在澄清任务需求…</small>";
+  head.appendChild(who);
+  left.appendChild(head);
+
+  const scroll = el("div", "chat-scroll");
+  scroll.appendChild(clarifyMsg("bot", `收到你的研究意向：<b>${esc(CLARIFY_TASK.object)}</b>。在正式开工前，我想先确认几个关键口径，团队会据此精准编排。`));
+
+  // clarify option grid, rendered inside a wide Manager bubble
+  const gridMsg = el("div", "msg");
+  const gAva = el("div", "m-avatar");
+  gAva.appendChild(avatar("manager", 38));
+  const gBody = el("div", "m-body");
+  gBody.style.maxWidth = "none";
+  gBody.appendChild(el("div", "m-meta", "<span>Manager</span><span>关键澄清项</span>"));
+  const gridWrap = el("div", "m-bubble");
+  gridWrap.style.width = "100%";
+  const grid = el("div", "clarify-grid");
+  gridWrap.appendChild(grid);
+  gBody.appendChild(gridWrap);
+  gridMsg.append(gAva, gBody);
+  scroll.appendChild(gridMsg);
+  renderClarifyGrid(grid);
+
+  scroll.appendChild(clarifyMsg("bot", "确认无误后点击右侧「确认并启动研究」，我会立刻把任务拆解给团队并进入作战室。"));
+  left.appendChild(scroll);
+
+  const inputBar = el("div", "chat-inputbar");
+  const input = el("input");
+  input.type = "text";
+  input.placeholder = "补充说明（可选）：例如特别关注的时间段或指标…";
+  const send = el("button", "btn btn-primary", "➤");
+  const fire = () => {
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = "";
+    scroll.appendChild(clarifyMsg("me", q));
+    scroll.scrollTop = scroll.scrollHeight;
+    setTimeout(() => {
+      scroll.appendChild(clarifyMsg("bot", "已记录你的补充说明，会同步到研究口径中。"));
+      scroll.scrollTop = scroll.scrollHeight;
+    }, 700);
+  };
+  send.addEventListener("click", fire);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") fire(); });
+  inputBar.append(input, send);
+  left.appendChild(inputBar);
+
+  // ---- right: live task summary ----
+  const right = el("div", "panel chat-col");
+  right.id = "clarifySummary";
+  layout.append(left, right);
+  renderClarifySummary(right);
+  return layout;
+}
+
+function clarifyMsg(role, html) {
+  const me = role === "me";
+  const node = el("div", `msg${me ? " me" : ""}`);
+  const ava = el("div", "m-avatar");
+  ava.appendChild(avatar(me ? "user" : "manager", 38));
+  const body = el("div", "m-body");
+  body.appendChild(el("div", "m-meta", `<span>${me ? "你" : "Manager"}</span><span>${nowClock()}</span>`));
+  body.appendChild(el("div", "m-bubble", html));
+  node.append(ava, body);
+  return node;
+}
+
+function renderClarifyGrid(grid) {
+  grid.innerHTML = "";
+  CLARIFY_GROUPS.forEach((g) => {
+    const card = el("div", "opt-card");
+    card.appendChild(el("h5", "", `${esc(g.title)} <small>${g.multi ? "可多选" : "单选"}</small>`));
+    const list = el("div", "opt-list");
+    g.items.forEach((label, i) => {
+      const sel = clarifySel[g.key].has(i);
+      const item = el("button", `opt-item${sel ? " sel" : ""}`);
+      item.innerHTML = `<span>${esc(label)}</span>${sel ? '<span class="tick">✓</span>' : ""}`;
+      item.addEventListener("click", () => {
+        toggleClarify(g, i);
+        renderClarifyGrid(grid);
+        renderClarifySummary($("#clarifySummary"));
+      });
+      list.appendChild(item);
+    });
+    card.appendChild(list);
+    grid.appendChild(card);
+  });
+}
+
+function toggleClarify(g, i) {
+  const set = clarifySel[g.key];
+  if (!g.multi) { set.clear(); set.add(i); return; }
+  const allIdx = g.allItem ? g.items.indexOf(g.allItem) : -1;
+  if (i === allIdx) { set.clear(); set.add(i); return; }
+  if (set.has(i)) set.delete(i); else set.add(i);
+  if (allIdx >= 0) set.delete(allIdx);
+  if (set.size === 0 && allIdx >= 0) set.add(allIdx);
+}
+
+function clarifyValue(key) {
+  const g = CLARIFY_GROUPS.find((x) => x.key === key);
+  return [...clarifySel[key]].sort((a, b) => a - b).map((i) => g.items[i]).join("、") || "—";
+}
+
+function renderClarifySummary(panel) {
+  if (!panel) return;
+  panel.innerHTML = "";
+  panel.appendChild(el("div", "panel-title", "任务摘要"));
+
+  const kv = el("div", "summary-kv");
+  [
+    ["研究对象", CLARIFY_TASK.object],
+    ["任务类型", CLARIFY_TASK.type],
+    ["投资周期", clarifyValue("period")],
+    ["风险偏好", clarifyValue("risk")],
+    ["研究重点", clarifyValue("focus")],
+  ].forEach(([k, v]) => {
+    kv.appendChild(el("div", "", `<div class="k">${esc(k)}</div><div>${esc(v)}</div>`));
+  });
+  panel.appendChild(kv);
+
+  panel.appendChild(el("div", "follow-sec-title", "分析范围"));
+  const check = el("div", "check-list");
+  ANALYSIS_SCOPE.forEach((s) => {
+    check.appendChild(el("div", "ck on", `<i>✓</i><span>${esc(s)}</span>`));
+  });
+  panel.appendChild(check);
+
+  panel.appendChild(el("div", "follow-sec-title", "预计投入"));
+  const yc = el("div", "yield-cards");
+  yc.innerHTML = `
+    <div class="yc"><strong>~4<small>min</small></strong><span>预计耗时</span></div>
+    <div class="yc"><strong>${CLARIFY_TASK.experts}</strong><span>参与专家</span></div>
+    <div class="yc"><strong>5</strong><span>涉及 Skill</span></div>`;
+  panel.appendChild(yc);
+
+  const go = el("button", "btn btn-primary", "🚀 确认并启动研究");
+  go.style.cssText = "width:100%;margin-top:16px";
+  go.addEventListener("click", () => {
+    toast("任务已启动，进入作战室（DEMO）");
+    navigate("war");
+  });
+  panel.appendChild(go);
+
+  const edit = el("button", "btn-ghost", "‹ 返回大厅重新描述");
+  edit.style.cssText = "width:100%;margin-top:8px";
+  edit.addEventListener("click", () => navigate("hall"));
+  panel.appendChild(edit);
+}
+
+// ---------------------------------------------------------------------------
+// page: war room (界面 03) — full sprite-driven build lands in the next step
+// ---------------------------------------------------------------------------
+function pageWarRoom() {
+  const wrap = el("div", "panel");
+  wrap.appendChild(screenTitle("03", "多 Agent 作战室", "任务执行可视化中心。"));
+  const box = el("div", "empty-state");
+  box.innerHTML = '<div class="es-ico">🛰</div><p>作战室精灵动画引擎即将上线。</p>';
+  wrap.appendChild(box);
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
 // page: experts (master-detail, 界面 04)
 // ---------------------------------------------------------------------------
 let expertSel = "manager";
@@ -976,6 +1155,9 @@ function boot() {
   renderTopbar();
   renderStatusbar();
   renderSidebar();
+  // expose the router so hall hero / LIVE-office previews can jump into the
+  // clarify + war-room sub-flows (which have no top-level nav entry).
+  window.__navigate = navigate;
   // land directly on the report follow-up view (matches the design)
   navigate("reports", REPORTS[0].id);
   setInterval(renderStatusbar, 30_000);

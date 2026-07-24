@@ -16,4 +16,4 @@ logs/
 .coverage
 htmlcov/
 smoke-artifacts/
-
+.tmp-*.png
