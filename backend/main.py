@@ -194,7 +194,7 @@ async def execute_task(request: TaskRequest) -> TaskExecutionResponse:
                 status_code=404,
                 detail=f"对话 {request.conversation_id} 不存在",
             )
-        conversation_context = conv.build_history_context(exclude_turns=1)
+        conversation_context = conv.build_history_context(exclude_turns=0)
     else:
         conv = conversation_store.create(title=request.prompt[:60])
 
