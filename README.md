@@ -145,12 +145,10 @@ Then open the local demo console:
 http://127.0.0.1:8000/
 ```
 
-The frontend has no Node.js build step. Its default **Demo mode** uses clearly
-labelled local example responses so the orchestration UI can be presented
-without external credentials. **Live API mode** calls the existing
-`POST /api/tasks` endpoint and therefore requires Ark configuration; tasks
-that fetch market data also require PandaData credentials. The interactive API
-documentation remains available at `http://127.0.0.1:8000/docs`.
+The frontend has no Node.js build step. It calls the existing
+`POST /api/tasks` endpoint directly and therefore requires Ark configuration;
+tasks that fetch market data also require PandaData credentials. The
+interactive API documentation remains available at `http://127.0.0.1:8000/docs`.
 
 The default result view first shows `aggregation.direct_answer`, then renders
 only `aggregation.content_blocks`. Possible block types include metrics,

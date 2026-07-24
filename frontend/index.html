@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="AlphaOS 动态多智能体量化研究组织演示台"
+      content="AlphaOS 动态多智能体量化研究工作台"
     />
     <title>AlphaOS · Research Console</title>
     <link rel="stylesheet" href="/static/styles.css" />
@@ -36,70 +36,15 @@
       </div>
     </header>
 
-    <main>
-      <section class="hero">
-        <div class="eyebrow"><span></span> ALPHAOS v0.3 · RESEARCH WORKSPACE</div>
-        <h1>让复杂的金融研究<br /><em>变成看得懂的结论</em></h1>
-        <p>
-          研究经理会理解目标、组织合适的专家并核对证据边界；你先看到结论与缺口，需要时再进入完整专业证据。
-        </p>
-        <div class="architecture" aria-label="AlphaOS 工作流程">
-          <span>User</span><i>→</i><span class="accent">Manager</span><i>→</i>
-          <span>Task Graph</span><i>→</i><span>Expert Pool</span><i>→</i>
-          <span>Result Aggregator</span>
-        </div>
-      </section>
-
-      <section class="workspace">
-        <div class="console-card">
-          <div class="card-heading">
-            <div>
-              <span class="section-number">01</span>
-              <h2>你想研究什么？</h2>
-            </div>
-            <div class="mode-switch" role="group" aria-label="研究运行方式">
-              <button class="mode-button active" data-mode="demo" type="button">
-                演示示例
-              </button>
-              <button class="mode-button" data-mode="live" type="button">
-                真实研究
-              </button>
-            </div>
-          </div>
-
-          <label class="sr-only" for="taskPrompt">研究任务</label>
-          <textarea
-            id="taskPrompt"
-            rows="4"
-            maxlength="20000"
-            placeholder="描述你希望 AlphaOS 完成的研究任务…"
-          >计算 000001.SZ、000002.SZ 和 600519.SH 在 2024 年的 R020 成交量放大因子，并审查主要失效风险。</textarea>
-
-          <div class="prompt-footer">
-            <div class="examples" aria-label="示例任务">
-              <span>试试</span>
-              <button type="button" data-scenario="factor">寻找研究线索</button>
-              <button type="button" data-scenario="r020-risk">验证一个量化指标</button>
-              <button type="button" data-scenario="r020-risk">检查结论风险</button>
-              <button type="button" data-scenario="research-report">生成完整研究报告</button>
-            </div>
-            <button class="run-button" id="runButton" type="button">
-              <span class="run-label">运行任务</span>
-              <span class="run-arrow" aria-hidden="true">↗</span>
-            </button>
-          </div>
-          <div class="mode-note" id="modeNote">
-            演示示例使用明确标注的本地数据，不会发起真实研究。
-          </div>
-        </div>
-
-        <aside class="capability-card">
-          <div class="card-heading compact">
+    <main class="chat-shell">
+      <aside class="capability-rail">
+        <details class="capability-card" open>
+          <summary class="card-heading compact">
             <div>
               <span class="section-number">SYSTEM</span>
               <h2>专家与能力</h2>
             </div>
-          </div>
+          </summary>
           <div class="expert-list">
             <div class="expert-row">
               <span class="expert-icon research">R</span>
@@ -134,148 +79,134 @@
               <span class="online">在线</span>
             </div>
           </div>
-          <details class="runtime-block">
-            <summary class="runtime-title">
+          <div class="runtime-block">
+            <div class="runtime-title">
               <span>专业工具</span>
               <span class="runtime-count">2 个可用</span>
-            </summary>
+            </div>
             <p class="runtime-help">由量化研究员按任务动态选择，无需预先指定。</p>
             <div class="skill-chip"><i></i> Factor Idea Generation</div>
             <div class="skill-chip"><i></i> R020 Volume Expansion</div>
-          </details>
+          </div>
           <div class="data-status">
             <span>PandaData</span>
             <strong id="pandaStatus">检测中</strong>
           </div>
-        </aside>
-      </section>
+        </details>
+      </aside>
 
-      <section class="results-section" id="resultsSection" aria-live="polite">
-        <div class="results-header">
-          <div>
-            <span class="section-number">02</span>
-            <h2>研究结论</h2>
-          </div>
-          <div class="result-meta">
-            <span id="resultMode">DEMO</span>
-            <span id="durationLabel">— ms</span>
-          </div>
-        </div>
-
-        <div class="view-mode-tabs" role="tablist" aria-label="结果查看方式">
-          <button
-            class="view-tab active"
-            id="plainTab"
-            type="button"
-            role="tab"
-            aria-selected="true"
-            aria-controls="plainView"
-            data-view="plain"
-          >
-            看得懂版
-          </button>
-          <button
-            class="view-tab"
-            id="professionalTab"
-            type="button"
-            role="tab"
-            aria-selected="false"
-            aria-controls="professionalView"
-            data-view="professional"
-          >
-            专业证据
-          </button>
-        </div>
-
-        <div id="plainView" role="tabpanel" aria-labelledby="plainTab">
-          <article class="plain-summary-card" id="plainSummary">
-            <div class="plain-summary-label">
-              <span>最直接的回答</span>
-              <span id="completionStatus">等待结果</span>
-              <span id="confidenceBadge">—</span>
-              <span id="failureFlag" hidden>包含失败步骤</span>
-            </div>
-            <h3 id="plainHeadline">等待研究结果</h3>
-            <p id="plainExplanation"></p>
-          </article>
-
-          <div class="aggregation-blocks" id="contentBlocks"></div>
-
-          <div class="result-panel human-timeline-panel">
-            <div class="panel-title">
-              <span>研究团队正在做什么</span>
-              <span id="eventCount">0 项进度</span>
-            </div>
-            <div class="timeline" id="timeline"></div>
-            <details class="technical-log">
-              <summary>查看完整运行日志</summary>
-              <div class="technical-event-log" id="plainTechnicalLog"></div>
-            </details>
+      <section class="chat-panel">
+        <div class="chat-scroll" id="chatScroll" aria-live="polite">
+          <div class="chat-empty" id="chatEmpty">
+            <div class="eyebrow"><span></span> ALPHAOS v0.3 · RESEARCH WORKSPACE</div>
+            <h1>让复杂的金融研究<br /><em>变成看得懂的结论</em></h1>
+            <p>
+              研究经理会理解目标、组织合适的专家并核对证据边界；你先看到结论与缺口，需要时再展开完整专业证据。在下方描述你的研究任务开始对话。
+            </p>
           </div>
         </div>
 
-        <div id="professionalView" role="tabpanel" aria-labelledby="professionalTab" hidden>
-          <div class="result-grid">
-            <div class="result-panel plan-panel">
-              <div class="panel-title">
-                <span>Manager 动态任务图</span>
-                <span id="complexityBadge">—</span>
-              </div>
-              <div class="plan-goal" id="planGoal">等待任务</div>
-              <div class="selected-agents" id="selectedAgents"></div>
-              <div class="dag" id="dag"></div>
-            </div>
-            <div class="result-panel professional-summary-panel">
-              <div class="panel-title">
-                <span>执行摘要</span>
-                <span id="resultCount">0 RESULTS</span>
-              </div>
-              <dl class="technical-summary" id="technicalSummary"></dl>
-            </div>
+        <form class="composer" id="composer">
+          <div class="examples" aria-label="示例任务">
+            <span>试试</span>
+            <button type="button" data-scenario="factor">寻找研究线索</button>
+            <button type="button" data-scenario="r020-risk">验证一个量化指标</button>
+            <button type="button" data-scenario="research-report">生成完整研究报告</button>
           </div>
-
-          <div class="result-panel expert-panel">
-            <div class="panel-title">
-              <span>专业证据与专家结果</span>
-              <span>原始字段</span>
-            </div>
-            <div class="expert-results" id="expertResults"></div>
+          <div class="composer-input-row">
+            <label class="sr-only" for="taskPrompt">研究任务</label>
+            <textarea
+              id="taskPrompt"
+              rows="2"
+              maxlength="20000"
+              placeholder="描述你希望 AlphaOS 完成的研究任务…（Ctrl/Cmd + Enter 发送）"
+            ></textarea>
+            <button class="run-button" id="runButton" type="button">
+              <span class="run-label">发送</span>
+              <span class="run-arrow" aria-hidden="true">↗</span>
+            </button>
           </div>
-
-          <div class="answer-card">
-            <div class="answer-label">
-              <span class="manager-orb">A</span>
-              <div><strong>Result Aggregator</strong><small>结构化直接答案</small></div>
-            </div>
-            <div class="answer-content" id="finalAnswer"></div>
-          </div>
-
-          <div class="result-panel technical-events-panel">
-            <div class="panel-title">
-              <span>技术执行详情</span>
-              <span>完整事件字段</span>
-            </div>
-            <div class="technical-event-log" id="technicalEventLog"></div>
-          </div>
-
-          <details class="raw-response">
-            <summary>查看经安全过滤的结构化响应 JSON</summary>
-            <pre id="rawJson"></pre>
-          </details>
-        </div>
-
-        <div class="disclaimer persistent-disclaimer" id="disclaimer"></div>
+        </form>
       </section>
     </main>
 
-    <footer>
-      <span>AlphaOS v0.3</span>
-      <span>Dynamic experts. Explicit evidence. Research only.</span>
-    </footer>
+    <template id="turnTemplate">
+      <article class="turn">
+        <div class="turn-user">
+          <span class="turn-role">你</span>
+          <p class="turn-prompt"></p>
+        </div>
+        <div class="turn-assistant">
+          <div class="turn-summary">
+            <div class="turn-summary-label">
+              <span class="turn-role-badge">AlphaOS</span>
+              <span class="turn-completion">运行中</span>
+              <span class="turn-confidence"></span>
+              <span class="turn-duration"></span>
+              <span class="turn-failure" hidden>包含失败步骤</span>
+            </div>
+            <h3 class="turn-headline">正在处理…</h3>
+            <p class="turn-explanation">研究团队正在组织专家并核对证据边界。</p>
+          </div>
+          <div class="turn-body"></div>
+        </div>
+      </article>
+    </template>
+
+    <template id="turnResultTemplate">
+      <div class="turn-blocks"></div>
+      <details class="turn-evidence">
+        <summary>查看专业证据</summary>
+        <div class="result-grid">
+          <div class="result-panel plan-panel">
+            <div class="panel-title">
+              <span>Manager 动态任务图</span>
+              <span class="turn-complexity">—</span>
+            </div>
+            <div class="plan-goal turn-plan-goal"></div>
+            <div class="selected-agents turn-selected-agents"></div>
+            <div class="dag turn-dag"></div>
+          </div>
+          <div class="result-panel">
+            <div class="panel-title">
+              <span>执行摘要</span>
+              <span class="turn-result-count">0 RESULTS</span>
+            </div>
+            <dl class="technical-summary turn-technical-summary"></dl>
+          </div>
+        </div>
+        <div class="result-panel expert-panel">
+          <div class="panel-title">
+            <span>专家结果</span>
+            <span>原始字段</span>
+          </div>
+          <div class="expert-results turn-expert-results"></div>
+        </div>
+        <div class="result-panel human-timeline-panel">
+          <div class="panel-title">
+            <span>研究团队做了什么</span>
+            <span class="turn-event-count">0 项进度</span>
+          </div>
+          <div class="timeline turn-timeline"></div>
+        </div>
+        <div class="result-panel technical-events-panel">
+          <div class="panel-title">
+            <span>技术执行详情</span>
+            <span>完整事件字段</span>
+          </div>
+          <div class="technical-event-log turn-technical-log"></div>
+        </div>
+        <details class="raw-response">
+          <summary>查看经安全过滤的结构化响应 JSON</summary>
+          <pre class="turn-raw-json"></pre>
+        </details>
+      </details>
+      <div class="disclaimer turn-disclaimer"></div>
+    </template>
 
     <script src="/static/presentation/status-labels.js" defer></script>
     <script src="/static/presentation/event-labels.js" defer></script>
     <script src="/static/presentation/build-plain-language-result.js" defer></script>
-    <script src="/static/app.js?v=20260723-p01" defer></script>
+    <script src="/static/app.js?v=20260724-p02" defer></script>
   </body>
 </html>
