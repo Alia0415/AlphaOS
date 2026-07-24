@@ -72,6 +72,12 @@ def _step(
         }
     if agent == "risk":
         inputs = {"strategy": "高换手成交量动量策略"}
+    if agent == "macro":
+        inputs = {
+            "industry": "新能源汽车",
+            "time_range": "未来6-12个月",
+            "research_goal": "评估宏观、政策与流动性环境",
+        }
     return {
         "id": step_id,
         "agent": agent,
@@ -317,6 +323,59 @@ def test_manager_rejects_report_without_declared_dependency() -> None:
 
     with pytest.raises(ManagerAgentError):
         ManagerAgent(client=client).create_plan("生成研究报告")
+
+
+def test_plan_validator_accepts_complete_macro_inputs() -> None:
+    plan = _plan(["macro"])
+
+    assert validate_execution_plan(plan, AgentRegistry()) is plan
+
+
+@pytest.mark.parametrize("missing", ["industry", "time_range", "research_goal"])
+def test_plan_validator_rejects_macro_missing_required_input(missing: str) -> None:
+    payload = _plan_payload(["macro"])
+    payload["steps"][0]["inputs"].pop(missing)
+    plan = ExecutionPlan.model_validate(payload)
+
+    with pytest.raises(PlanValidationError, match=f"non-empty {missing}"):
+        validate_execution_plan(plan, AgentRegistry())
+
+
+def test_plan_validator_rejects_macro_half_open_window() -> None:
+    payload = _plan_payload(["macro"])
+    payload["steps"][0]["inputs"]["start_date"] = "20240101"
+    plan = ExecutionPlan.model_validate(payload)
+
+    with pytest.raises(PlanValidationError, match="both start_date and end_date"):
+        validate_execution_plan(plan, AgentRegistry())
+
+
+def test_plan_validator_rejects_macro_inverted_window() -> None:
+    payload = _plan_payload(["macro"])
+    payload["steps"][0]["inputs"]["start_date"] = "20241231"
+    payload["steps"][0]["inputs"]["end_date"] = "20240101"
+    plan = ExecutionPlan.model_validate(payload)
+
+    with pytest.raises(PlanValidationError, match="start_date is after end_date"):
+        validate_execution_plan(plan, AgentRegistry())
+
+
+def test_manager_repairs_macro_input_contract_once() -> None:
+    invalid = _plan_payload(["macro"])
+    invalid["steps"][0]["inputs"] = {"industry": "新能源汽车"}
+    valid = _plan_payload(["macro"])
+    client = MockArkClient(
+        json.dumps(invalid, ensure_ascii=False),
+        json.dumps(valid, ensure_ascii=False),
+    )
+
+    plan = ManagerAgent(client=client).create_plan(
+        "评估新能源汽车行业的宏观与政策环境"
+    )
+
+    assert len(client.prompts) == 2
+    assert plan.steps[0].inputs["research_goal"]
+    assert "Macro 必须使用非空" in client.prompts[1]
 
 
 def test_research_calculates_metrics_in_python_and_calls_pandadata() -> None:

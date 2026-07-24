@@ -81,6 +81,8 @@ def _validate_step_contract(
 
     if step.agent == AgentId.RESEARCH:
         _validate_research_inputs(step)
+    elif step.agent == AgentId.MACRO:
+        _validate_macro_inputs(step)
     elif step.agent == AgentId.REPORT and not step.depends_on:
         raise PlanValidationError(
             f"Report step {step.id} requires at least one declared dependency"
@@ -184,6 +186,45 @@ def _validate_industry_research_inputs(
                 f"Industry research step {step.id} {name} must be "
                 "a non-empty string"
             )
+
+
+def _validate_macro_inputs(step: PlanStep) -> None:
+    inputs = step.inputs
+    for name in ("industry", "time_range", "research_goal"):
+        value = inputs.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise PlanValidationError(
+                f"Macro step {step.id} requires a non-empty {name}"
+            )
+
+    start = inputs.get("start_date")
+    end = inputs.get("end_date")
+    start_missing = start is None or (isinstance(start, str) and not start.strip())
+    end_missing = end is None or (isinstance(end, str) and not end.strip())
+    if start_missing != end_missing:
+        raise PlanValidationError(
+            f"Macro step {step.id} must provide both start_date and end_date"
+        )
+    if not start_missing:
+        start_date = _validated_macro_date(step, "start_date", start)
+        end_date = _validated_macro_date(step, "end_date", end)
+        if start_date > end_date:
+            raise PlanValidationError(
+                f"Macro step {step.id} start_date is after end_date"
+            )
+
+
+def _validated_macro_date(step: PlanStep, name: str, value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise PlanValidationError(
+            f"Macro step {step.id} requires {name} in YYYYMMDD format"
+        )
+    try:
+        return datetime.strptime(value, "%Y%m%d")
+    except ValueError:
+        raise PlanValidationError(
+            f"Macro step {step.id} has invalid {name}: {value}"
+        ) from None
 
 
 def _single_research_symbol(inputs: dict[str, Any]) -> str | None:

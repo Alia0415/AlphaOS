@@ -285,6 +285,9 @@ Agent 输入契约：
   或 full_dossier scope；
 - 行业 Research 必须使用非空 industry；time_range、research_goal、focus 如提供
   必须为非空字符串；不得同时提供 symbol、symbols 或财报 scope；
+- Macro 必须使用非空 industry、time_range、research_goal；若提供历史区间必须同时
+  给出合法 YYYYMMDD 的 start_date 与 end_date 且不倒置，不得只给其一；纯个股价格、
+  财务或因子任务不需要 macro，不要为修复契约而保留缺输入的 macro，可直接移除；
 - Report 必须声明至少一个上游 depends_on；
 - 不要为了修复契约而增加不需要的专家或改成固定流程。
 """.strip()
