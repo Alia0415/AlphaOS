@@ -102,6 +102,10 @@ def _validate_research_inputs(step: PlanStep) -> None:
             f"Research step {step.id} has unsupported scope: {scope}"
         )
 
+    if "industry" in inputs:
+        _validate_industry_research_inputs(step, inputs, scope)
+        return
+
     if scope in _DOSSIER_SCOPES:
         symbol = _single_research_symbol(inputs)
         if symbol is None:
@@ -150,6 +154,36 @@ def _validate_research_inputs(step: PlanStep) -> None:
             f"Market research step {step.id} fields must include "
             "trade_date, symbol, close, and volume"
         )
+
+
+def _validate_industry_research_inputs(
+    step: PlanStep,
+    inputs: dict[str, Any],
+    scope: Any,
+) -> None:
+    industry = inputs.get("industry")
+    if not isinstance(industry, str) or not industry.strip():
+        raise PlanValidationError(
+            f"Industry research step {step.id} requires a non-empty industry"
+        )
+    if "symbol" in inputs or "symbols" in inputs:
+        raise PlanValidationError(
+            f"Industry research step {step.id} cannot include symbol or symbols"
+        )
+    if scope in _DOSSIER_SCOPES:
+        raise PlanValidationError(
+            f"Industry research step {step.id} cannot include dossier scope"
+        )
+
+    for name in ("time_range", "research_goal", "focus"):
+        if name not in inputs:
+            continue
+        value = inputs[name]
+        if not isinstance(value, str) or not value.strip():
+            raise PlanValidationError(
+                f"Industry research step {step.id} {name} must be "
+                "a non-empty string"
+            )
 
 
 def _single_research_symbol(inputs: dict[str, Any]) -> str | None:

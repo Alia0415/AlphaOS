@@ -25,6 +25,9 @@ from backend.skills.contracts import SkillInvocation, SkillResult, SkillStatus
 from backend.skills.skill_registry import SkillRegistry
 
 
+_DOSSIER_SCOPES = {"financials", "financial_risk", "full_dossier"}
+
+
 class ResearchAgent:
     """Fetch market observations, calculate evidence, then ask Ark to explain it."""
 
@@ -46,10 +49,136 @@ class ResearchAgent:
     def execute(self, task: ExpertTask) -> ExpertResult:
         if task.agent != AgentId.RESEARCH:
             return _failed(task, "Research Agent 收到了不匹配的任务类型。")
+
+        scope = task.inputs.get("scope")
+        if scope in _DOSSIER_SCOPES:
+            plan = self._skill_planner.create_plan(task)
+            return self._execute_dossier(task, plan)
+        if "industry" in task.inputs:
+            return self._execute_industry(task)
+
+        # Preserve the existing direct-call behavior that can infer a dossier
+        # scope from a clearly financial objective. Valid Manager plans use an
+        # explicit scope and take the branch above.
         plan = self._skill_planner.create_plan(task)
         if plan.selected_skills:
             return self._execute_dossier(task, plan)
         return self._execute_market(task)
+
+    def _execute_industry(self, task: ExpertTask) -> ExpertResult:
+        inputs = task.inputs
+        industry = str(inputs.get("industry", "")).strip()
+        time_range = str(inputs.get("time_range", "")).strip()
+        research_goal = str(inputs.get("research_goal", "")).strip()
+        focus = str(inputs.get("focus", "")).strip()
+
+        dimensions = [
+            "需求与增长驱动",
+            "产业链与竞争格局",
+            "政策与监管",
+            "技术与成本变化",
+            "估值与市场预期",
+            "主要风险",
+        ]
+        evidence = [
+            {
+                "type": "industry_research_framework",
+                "industry": industry,
+                "time_range": time_range or None,
+                "research_goal": research_goal or None,
+                "focus": focus or None,
+                "dimensions": dimensions,
+            },
+            {
+                "type": "industry_research_verification_items",
+                "industry": industry,
+                "items": [
+                    "核验终端需求、订单、产能利用率与供需变化",
+                    "核验产业链议价权、竞争格局与关键公司财务表现",
+                    "核验最新政策、监管要求及其实际执行影响",
+                    "核验技术路线、成本曲线与替代风险",
+                    "核验当前估值、市场一致预期与预期差",
+                ],
+            },
+        ]
+        summary = (
+            f"已为{industry}建立保守的行业研究框架。当前缺少独立行业基本面"
+            "数据库与实时数据，需围绕需求、产业链、政策、技术成本、估值预期"
+            "和风险逐项补充可核验证据后，才能形成方向性结论。"
+        )
+        fallback_used = False
+        try:
+            ark_summary = self._get_ark_client().chat(
+                _industry_explanation_prompt(
+                    task=task,
+                    industry=industry,
+                    time_range=time_range,
+                    research_goal=research_goal,
+                    focus=focus,
+                    dimensions=dimensions,
+                )
+            ).strip()
+            if ark_summary:
+                summary = ark_summary
+            else:
+                fallback_used = True
+        except Exception:
+            fallback_used = True
+
+        limitations = [
+            "当前行业研究未接入独立行业基本面数据库。",
+            "当前结论不能替代实时数据、公司级财务分析或投资建议。",
+            (
+                "宏观、政策、周期和流动性由 Macro Agent 负责；"
+                "Research Agent 在此仅提供行业层面的研究框架与待验证事项。"
+            ),
+        ]
+        if fallback_used:
+            limitations.append(
+                "Ark 分析服务不可用；当前输出为确定性的保守研究框架，"
+                "未生成具体增长率、市场规模、政策日期或收益预测。"
+            )
+
+        return ExpertResult(
+            task_id=task.task_id,
+            agent=AgentId.RESEARCH,
+            status="completed",
+            summary=summary,
+            evidence=evidence,
+            assumptions=[
+                "当前输出仅建立研究框架，不假设任何未经验证的行业事实或数值。",
+                (
+                    f"研究期限按“{time_range}”理解。"
+                    if time_range
+                    else "用户未指定研究期限，后续分析需先明确时间范围。"
+                ),
+            ],
+            risks=[
+                "缺少实时行业供需、价格、竞争格局和公司财务数据可能导致判断偏差。",
+                "政策、技术路线和市场预期变化可能使定性判断快速失效。",
+            ],
+            limitations=limitations,
+            recommendations=[
+                "接入可追溯的行业供需、产业链和估值数据后再形成结论。",
+                "结合公司级财务证据验证行业观点是否能传导到具体标的。",
+                "如任务需要宏观判断，应结合独立的 Macro Agent 结果进行聚合。",
+            ],
+            metadata={
+                "mode": "industry_research",
+                "industry": industry,
+                "time_range": time_range or None,
+                "research_goal": research_goal or None,
+                "focus": focus or None,
+                "original_user_request": task.original_user_request,
+                "analysis_source": (
+                    "deterministic_framework"
+                    if fallback_used
+                    else "ark_qualitative_analysis"
+                ),
+                "ark_fallback_used": fallback_used,
+                "independent_industry_database_connected": False,
+            },
+        )
 
     def _execute_market(self, task: ExpertTask) -> ExpertResult:
         inputs = task.inputs
@@ -780,6 +909,38 @@ def _explanation_prompt(
 保证收益或引入上下文中不存在的事实。用简洁中文返回一段研究摘要。
 
 结构化证据：
+{json.dumps(payload, ensure_ascii=False)}
+""".strip()
+
+
+def _industry_explanation_prompt(
+    *,
+    task: ExpertTask,
+    industry: str,
+    time_range: str,
+    research_goal: str,
+    focus: str,
+    dimensions: list[str],
+) -> str:
+    payload = {
+        "industry": industry,
+        "time_range": time_range or None,
+        "research_goal": research_goal or None,
+        "focus": focus or None,
+        "original_user_request": task.original_user_request,
+        "research_dimensions": dimensions,
+    }
+    return f"""
+你是 AlphaOS Research Agent，负责行业层面的定性研究框架，不承担完整宏观分析。
+Macro Agent 另行负责宏观、政策、周期和流动性。当前没有接入独立行业基本面
+数据库、实时行情或公司财务数据。
+
+请基于用户目标输出一段保守、结构化的中文行业研究摘要，只能描述应分析的逻辑、
+关键问题、可能机制和待验证事项。不得声称已经核验事实，不得给出具体增长率、
+市场规模、政策日期、估值点位、价格目标或收益预测，不得给出投资建议。
+明确说明结论需要实时数据和公司级财务分析验证。
+
+任务上下文：
 {json.dumps(payload, ensure_ascii=False)}
 """.strip()
 
