@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from datetime import date
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from backend.agents.macro_agent import MacroAgent
+from backend.agents.manager_agent import ManagerAgent
+from backend.core.agent_registry import AgentRegistry
+from backend.core.contracts import AgentId, ExpertTask
+from backend.core.workflow_executor import _default_handlers
 from backend.services.pandadata_client import PandaDataClient
 
 
@@ -95,13 +102,6 @@ def test_pandadata_macro_data_rejects_unknown_api_before_authentication() -> Non
             end_date="20260723",
             fields=[],
         )
-
-
-import json
-from datetime import date
-
-from backend.agents.macro_agent import MacroAgent
-from backend.core.contracts import AgentId, ExpertTask
 
 
 class MockArk:
@@ -369,12 +369,6 @@ def test_macro_continues_with_partial_api_failure() -> None:
     assert [item["symbol"] for item in result.evidence] == ["CI0000001"]
     assert any("部分" in item for item in result.limitations)
     assert "provider detail" not in result.model_dump_json()
-
-
-from backend.agents.manager_agent import ManagerAgent
-from backend.core.agent_registry import AgentRegistry
-from backend.core.contracts import ExecutionPlan
-from backend.core.workflow_executor import WorkflowExecutor, _default_handlers
 
 
 def plan_payload(agent: str, inputs: dict[str, Any]) -> dict[str, Any]:
