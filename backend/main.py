@@ -34,11 +34,18 @@ from backend.services.pandadata_client import (
 
 
 app = FastAPI(title="AlphaOS API", version="0.3.0")
-FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_DIR = REPO_ROOT / "frontend"
+PUBLIC_DIR = REPO_ROOT / "public"
 app.mount(
     "/static",
     StaticFiles(directory=FRONTEND_DIR),
     name="frontend-static",
+)
+app.mount(
+    "/pixel",
+    StaticFiles(directory=PUBLIC_DIR / "pixel"),
+    name="pixel-sprites",
 )
 pandadata = PandaDataClient()
 router = RouterAgent()
@@ -100,6 +107,11 @@ class MarketDataResponse(BaseModel):
 @app.get("/", include_in_schema=False)
 async def frontend() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/office", include_in_schema=False)
+async def office_frontend() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "office" / "index.html")
 
 
 @app.get("/api/health")
