@@ -51,6 +51,8 @@ DEFAULT_EXPERTS = (
             "start_period",
             "end_period",
             "scope",
+            "industry",
+            "time_range",
             "focus",
             "research_goal",
         ),
