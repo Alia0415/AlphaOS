@@ -22,8 +22,14 @@ const EXAMPLE_PROMPTS = {
 };
 
 const state = {
-  running: false,
+  conversations: [],
+  activeConversationId: null,
   turns: [],
+  running: false,
+  originalPrompt: "",
+  clarificationHistory: [],
+  pendingClarification: null,
+  activeTurn: null,
 };
 
 const elements = {};
@@ -33,6 +39,7 @@ document.addEventListener("DOMContentLoaded", () => {
   cacheElements();
   bindEvents();
   checkServices();
+  loadConversations();
 });
 
 function cacheElements() {
@@ -44,6 +51,12 @@ function cacheElements() {
     "composer",
     "chatScroll",
     "chatEmpty",
+    "clarificationBanner",
+    "clarificationRound",
+    "clarificationQuestions",
+    "clarificationReset",
+    "conversationList",
+    "newConversationBtn",
   ].forEach((id) => {
     elements[id] = document.getElementById(id);
   });
@@ -66,6 +79,8 @@ function bindEvents() {
       runTask();
     }
   });
+  elements.clarificationReset.addEventListener("click", resetClarification);
+  elements.newConversationBtn.addEventListener("click", newConversation);
 }
 
 async function checkServices() {
@@ -96,19 +111,41 @@ async function checkServices() {
 function selectScenario(scenario) {
   const prompt = EXAMPLE_PROMPTS[scenario];
   if (!prompt) return;
+  resetClarification();
   elements.taskPrompt.value = prompt;
   elements.taskPrompt.focus();
 }
 
 async function runTask() {
   if (state.running) return;
-  const prompt = elements.taskPrompt.value.trim();
-  if (!prompt) {
+  const inputValue = elements.taskPrompt.value.trim();
+  if (!inputValue) {
     elements.taskPrompt.focus();
     return;
   }
 
-  const turn = createTurn(prompt);
+  let turn;
+  let promptToSend;
+
+  if (state.pendingClarification && state.activeTurn) {
+    turn = state.activeTurn;
+    appendTurnFollowUp(turn, inputValue);
+    state.clarificationHistory = [
+      ...state.clarificationHistory,
+      {
+        questions: state.pendingClarification.questions,
+        answer: inputValue,
+      },
+    ];
+    promptToSend = state.originalPrompt;
+  } else {
+    resetClarification();
+    state.originalPrompt = inputValue;
+    turn = createTurn(inputValue);
+    state.activeTurn = turn;
+    promptToSend = inputValue;
+  }
+
   elements.taskPrompt.value = "";
   setRunning(true);
   scrollToLatest();
@@ -117,13 +154,27 @@ async function runTask() {
     const response = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({
+        prompt: promptToSend,
+        clarification_history: state.clarificationHistory,
+        conversation_id: state.activeConversationId,
+      }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload.detail || `请求失败（HTTP ${response.status}）`);
     }
+
+    if (payload.conversation_id) {
+      state.activeConversationId = payload.conversation_id;
+    }
+
     renderTurnResult(turn, payload);
+    updateClarificationState(payload);
+
+    if (state.activeConversationId) {
+      loadConversations();
+    }
   } catch (error) {
     renderTurnError(turn, error instanceof Error ? error.message : "任务执行失败");
   } finally {
@@ -142,6 +193,40 @@ function setRunning(running) {
 
 function scrollToLatest() {
   elements.chatScroll.scrollTop = elements.chatScroll.scrollHeight;
+}
+
+function resetClarification() {
+  state.pendingClarification = null;
+  state.clarificationHistory = [];
+  elements.clarificationBanner.hidden = true;
+}
+
+function updateClarificationState(payload) {
+  if (payload.aggregation?.completion_status === "needs_clarification") {
+    const questions = payload.plan?.clarification_questions || [];
+    state.pendingClarification = { questions };
+    elements.clarificationBanner.hidden = false;
+    elements.clarificationRound.textContent = `${state.clarificationHistory.length + 1}`;
+    elements.clarificationQuestions.innerHTML = questions
+      .map((q) => `<p>${escapeHtml(q)}</p>`)
+      .join("");
+  } else {
+    resetClarification();
+    elements.clarificationBanner.hidden = true;
+  }
+}
+
+function appendTurnFollowUp(turn, text) {
+  const followUp = document.createElement("div");
+  followUp.className = "turn-user turn-follow-up";
+  const role = document.createElement("span");
+  role.className = "turn-role";
+  role.textContent = "补充";
+  const content = document.createElement("p");
+  content.className = "turn-prompt";
+  content.textContent = text;
+  followUp.append(role, content);
+  turn.root.querySelector(".turn-assistant").before(followUp);
 }
 
 function createTurn(prompt) {
@@ -759,4 +844,145 @@ function emptyState(message) {
   element.className = "empty-state";
   element.textContent = message;
   return element;
+}
+
+/* ---------- Conversation management ---------- */
+
+async function loadConversations() {
+  try {
+    const resp = await fetch("/api/conversations", {
+      headers: { Accept: "application/json" },
+    });
+    if (!resp.ok) return;
+    state.conversations = await resp.json();
+    renderConversationList();
+  } catch (_) {/* silently fail */}
+}
+
+function renderConversationList() {
+  elements.conversationList.innerHTML = "";
+  if (!state.conversations.length) {
+    const empty = document.createElement("div");
+    empty.className = "conversation-empty";
+    empty.textContent = "新对话会在提交后自动创建";
+    elements.conversationList.append(empty);
+    return;
+  }
+  state.conversations.forEach((conv) => {
+    const item = document.createElement("div");
+    item.className = "conversation-item";
+    if (conv.id === state.activeConversationId) item.classList.add("active");
+    item.dataset.id = conv.id;
+
+    const info = document.createElement("div");
+    info.className = "conversation-item-info";
+
+    const title = document.createElement("div");
+    title.className = "conversation-item-title";
+    title.textContent = conv.title;
+
+    const meta = document.createElement("div");
+    meta.className = "conversation-item-meta";
+    meta.textContent = `${conv.turn_count} 轮`;
+
+    const del = document.createElement("button");
+    del.className = "conversation-item-delete";
+    del.textContent = "✕";
+    del.title = "删除对话";
+    del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await deleteConversation(conv.id);
+    });
+
+    item.addEventListener("click", () => switchConversation(conv.id));
+
+    info.append(title, meta);
+    item.append(info, del);
+    elements.conversationList.append(item);
+  });
+}
+
+async function newConversation() {
+  if (state.running) return;
+  resetClarification();
+  elements.chatScroll.querySelectorAll(".turn").forEach((el) => el.remove());
+  elements.chatEmpty.hidden = false;
+  state.activeConversationId = null;
+  state.activeTurn = null;
+  state.originalPrompt = "";
+  state.clarificationHistory = [];
+  elements.taskPrompt.value = "";
+  renderConversationList();
+}
+
+async function switchConversation(convId) {
+  if (state.running) return;
+  try {
+    const resp = await fetch(`/api/conversations/${convId}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!resp.ok) return;
+    const conv = await resp.json();
+
+    resetClarification();
+    state.activeConversationId = conv.id;
+    state.activeTurn = null;
+    state.originalPrompt = "";
+
+    elements.chatScroll.querySelectorAll(".turn").forEach((el) => el.remove());
+    elements.chatEmpty.hidden = true;
+
+    (conv.turns || []).forEach((data) => restoreTurnFromHistory(data));
+
+    renderConversationList();
+    scrollToLatest();
+  } catch (_) {/* silently fail */}
+}
+
+async function deleteConversation(convId) {
+  if (state.activeConversationId === convId) {
+    await newConversation();
+  }
+  try {
+    await fetch(`/api/conversations/${convId}`, { method: "DELETE" });
+  } catch (_) {/* silently fail */}
+  state.conversations = state.conversations.filter((c) => c.id !== convId);
+  renderConversationList();
+}
+
+function restoreTurnFromHistory(data) {
+  const turn = createTurn(data.prompt);
+  turn.status = "done";
+  turn.root.classList.remove("turn-loading");
+
+  const plainResult = buildPlainLanguageResult(data);
+
+  turn.completion.textContent = completionLabel(plainResult.completionStatus);
+  turn.confidence.textContent = confidenceLabel(plainResult.directAnswer.confidence);
+  turn.duration.textContent = `${formatNumber(data.duration_ms || 0)} ms`;
+  turn.failure.hidden = !plainResult.hasFailures;
+  turn.root.classList.toggle("has-failures", plainResult.hasFailures);
+  turn.headline.textContent = plainResult.directAnswer.headline;
+  turn.explanation.textContent = plainResult.directAnswer.explanation;
+
+  const dom = buildTurnDetailDom();
+  const plan = data.plan || {};
+  const events = Array.isArray(data.events) ? data.events : [];
+  const results = data.results && typeof data.results === "object" ? data.results : {};
+
+  dom.complexity.textContent = String(plan.complexity || "—").toUpperCase();
+  dom.planGoal.textContent = plan.goal || "未返回任务目标";
+  dom.resultCount.textContent = `${Object.keys(results).length} RESULTS`;
+  dom.eventCount.textContent = `${events.length} 项进度`;
+  renderDag(dom.dag, plan.steps || []);
+  renderSelectedAgents(dom.selectedAgents, plan.selected_agents || []);
+  renderTimeline(dom.timeline, events);
+  renderTechnicalLog(dom.technicalLog, events);
+  renderExpertResults(dom.expertResults, results);
+  renderContentBlocks(dom.blocks, plainResult.contentBlocks);
+  renderTechnicalSummary(dom.technicalSummary, data, plainResult);
+  dom.disclaimer.textContent = data.disclaimer || DISCLAIMER;
+  dom.rawJson.textContent = JSON.stringify(safeForDisplay(data), null, 2);
+
+  turn.body.replaceChildren(dom.fragment);
 }

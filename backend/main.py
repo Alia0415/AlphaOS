@@ -18,12 +18,20 @@ from backend.agents.router_agent import (
     RouterAgentError,
 )
 from backend.agents.manager_agent import ManagerAgent, ManagerAgentError
+from backend.conversation.store import (
+    Conversation,
+    TurnRecord,
+    get_store,
+)
 from backend.core.contracts import (
+    MAX_CLARIFICATION_ROUNDS,
+    ClarificationTurn,
     ExecutionEvent,
     ExecutionPlan,
     ExpertResult,
     RESEARCH_DISCLAIMER,
     TaskExecutionResponse,
+    format_clarification_questions,
 )
 from backend.core.result_aggregator import ResultAggregator
 from backend.core.workflow_executor import WorkflowExecutor
@@ -33,7 +41,7 @@ from backend.services.pandadata_client import (
 )
 
 
-app = FastAPI(title="AlphaOS API", version="0.3.0")
+app = FastAPI(title="AlphaOS API", version="0.4.0")
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 app.mount(
     "/static",
@@ -45,6 +53,7 @@ router = RouterAgent()
 manager = ManagerAgent()
 workflow_executor = WorkflowExecutor()
 result_aggregator = ResultAggregator()
+conversation_store = get_store()
 
 
 class RouteRequest(BaseModel):
@@ -120,19 +129,82 @@ async def route_request(request: RouteRequest) -> RouteDecision:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+class TaskRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20_000)
+    clarification_history: list[ClarificationTurn] = Field(
+        default_factory=list, max_length=MAX_CLARIFICATION_ROUNDS
+    )
+    conversation_id: str | None = Field(
+        default=None, max_length=64,
+        description="Existing conversation ID to continue, or null for a new session.",
+    )
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str) -> str:
+        prompt = value.strip()
+        if not prompt:
+            raise ValueError("prompt 不能为空")
+        return prompt
+
+
+@app.get("/api/conversations")
+async def list_conversations() -> list[dict[str, Any]]:
+    return [conv.to_meta() for conv in conversation_store.list_all()]
+
+
+@app.get("/api/conversations/{conv_id}")
+async def get_conversation(conv_id: str) -> dict[str, Any]:
+    conv = conversation_store.get(conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return {
+        **conv.to_meta(),
+        "turns": [turn.to_detail() for turn in conv.turns],
+    }
+
+
+@app.delete("/api/conversations/{conv_id}", status_code=204)
+async def delete_conversation(conv_id: str) -> None:
+    if not conversation_store.delete(conv_id):
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+
 @app.post("/api/plan", response_model=ExecutionPlan)
-async def plan_request(request: RouteRequest) -> ExecutionPlan:
+async def plan_request(request: TaskRequest) -> ExecutionPlan:
     try:
-        return await run_in_threadpool(manager.create_plan, request.prompt)
+        return await run_in_threadpool(
+            manager.create_plan, request.prompt, request.clarification_history
+        )
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/tasks", response_model=TaskExecutionResponse)
-async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
+async def execute_task(request: TaskRequest) -> TaskExecutionResponse:
     started_at = perf_counter()
+    round_number = len(request.clarification_history) + 1
+
+    conv: Conversation | None = None
+    conversation_context: str | None = None
+    if request.conversation_id:
+        conv = conversation_store.get(request.conversation_id)
+        if conv is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"对话 {request.conversation_id} 不存在",
+            )
+        conversation_context = conv.build_history_context(exclude_turns=1)
+    else:
+        conv = conversation_store.create(title=request.prompt[:60])
+
     try:
-        plan = await run_in_threadpool(manager.create_plan, request.prompt)
+        plan = await run_in_threadpool(
+            manager.create_plan,
+            request.prompt,
+            request.clarification_history,
+            conversation_context,
+        )
         events = [
             ExecutionEvent(
                 type="plan_created",
@@ -151,8 +223,14 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
             events.append(
                 ExecutionEvent(
                     type="clarification_required",
-                    message=plan.clarification_question
-                    or "任务需要补充关键信息。",
+                    message=format_clarification_questions(
+                        plan.clarification_questions
+                    ),
+                    metadata={
+                        "round": round_number,
+                        "max_rounds": MAX_CLARIFICATION_ROUNDS,
+                        "questions": plan.clarification_questions,
+                    },
                 )
             )
             results = {}
@@ -198,14 +276,29 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
         )
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    duration_ms = max(0, round((perf_counter() - started_at) * 1000))
+
+    turn = TurnRecord(
+        prompt=request.prompt,
+        plan=plan,
+        results=results,
+        aggregation=aggregation,
+        events=[e.model_dump(mode="json") for e in events],
+        final_answer=final_answer,
+        duration_ms=duration_ms,
+    )
+    conv.add_turn(turn)
+
     return TaskExecutionResponse(
         plan=plan,
         events=events,
         results=results,
         aggregation=aggregation,
         final_answer=final_answer,
-        duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+        duration_ms=duration_ms,
         disclaimer=RESEARCH_DISCLAIMER,
+        conversation_id=conv.id,
     )
 
 

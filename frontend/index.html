@@ -38,6 +38,13 @@
 
     <main class="chat-shell">
       <aside class="capability-rail">
+        <div class="conversation-panel">
+          <div class="conversation-header">
+            <span class="conversation-title">会话</span>
+            <button class="conversation-new" id="newConversationBtn" type="button" title="新建会话">＋</button>
+          </div>
+          <div class="conversation-list" id="conversationList"></div>
+        </div>
         <details class="capability-card" open>
           <summary class="card-heading compact">
             <div>
@@ -106,6 +113,13 @@
           </div>
         </div>
 
+        <div class="clarification-banner" id="clarificationBanner" hidden>
+          <div class="clarification-banner-head">
+            <span class="clarification-round">第 <strong id="clarificationRound">1</strong> 轮追问</span>
+            <button type="button" id="clarificationReset">重新开始</button>
+          </div>
+          <div class="clarification-questions" id="clarificationQuestions"></div>
+        </div>
         <form class="composer" id="composer">
           <div class="examples" aria-label="示例任务">
             <span>试试</span>

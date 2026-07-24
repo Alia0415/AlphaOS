@@ -8,7 +8,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from backend.core.agent_registry import AgentRegistry
-from backend.core.contracts import ExecutionPlan
+from backend.core.contracts import (
+    MAX_CLARIFICATION_ROUNDS,
+    ClarificationTurn,
+    ExecutionPlan,
+)
 from backend.core.plan_validator import PlanValidationError, validate_execution_plan
 from backend.services.ark_client import ArkClient, ArkClientError
 
@@ -28,28 +32,37 @@ class ManagerAgent:
         self._client = client
         self.registry = registry or AgentRegistry()
 
-    def create_plan(self, user_request: str) -> ExecutionPlan:
+    def create_plan(
+        self,
+        user_request: str,
+        clarification_history: list[ClarificationTurn] | None = None,
+        conversation_context: str | None = None,
+    ) -> ExecutionPlan:
         request = user_request.strip()
         if not request:
             raise ManagerAgentError("规划请求不能为空。")
+        history = clarification_history or []
+        round_number = len(history) + 1
 
-        prompt = self._planning_prompt(request)
+        prompt = self._planning_prompt(request, history, round_number, conversation_context)
         try:
             raw_response = self._get_client().chat(prompt)
         except ArkClientError as exc:
             raise ManagerAgentError(str(exc)) from None
 
         try:
-            return self._parse_and_validate(raw_response)
+            return self._parse_and_validate(raw_response, round_number)
         except (json.JSONDecodeError, ValidationError, PlanValidationError, ValueError) as exc:
             repair_prompt = self._repair_prompt(
                 request=request,
+                clarification_history=history,
+                round_number=round_number,
                 invalid_response=raw_response,
                 error=str(exc),
             )
             try:
                 repaired_response = self._get_client().chat(repair_prompt)
-                return self._parse_and_validate(repaired_response)
+                return self._parse_and_validate(repaired_response, round_number)
             except ArkClientError as repair_exc:
                 raise ManagerAgentError(str(repair_exc)) from None
             except (
@@ -62,12 +75,24 @@ class ManagerAgent:
                     "Manager Agent 在一次修复后仍未返回有效的执行计划。"
                 ) from None
 
-    def _parse_and_validate(self, raw_response: str) -> ExecutionPlan:
+    def _parse_and_validate(self, raw_response: str, round_number: int) -> ExecutionPlan:
         payload = _extract_json(raw_response)
         plan = ExecutionPlan.model_validate(payload)
-        return validate_execution_plan(plan, self.registry)
+        plan = validate_execution_plan(plan, self.registry)
+        if plan.needs_clarification and round_number > MAX_CLARIFICATION_ROUNDS:
+            raise ValueError(
+                f"已达到最大追问轮次（{MAX_CLARIFICATION_ROUNDS}），"
+                "Manager 不允许继续澄清，必须结合已有信息和合理假设生成可执行计划。"
+            )
+        return plan
 
-    def _planning_prompt(self, request: str) -> str:
+    def _planning_prompt(
+        self,
+        request: str,
+        history: list[ClarificationTurn],
+        round_number: int,
+        conversation_context: str | None = None,
+    ) -> str:
         registry_json = json.dumps(
             self.registry.prompt_payload(),
             ensure_ascii=False,
@@ -76,6 +101,15 @@ class ManagerAgent:
         schema_json = json.dumps(
             ExecutionPlan.model_json_schema(),
             ensure_ascii=False,
+        )
+        round_rule = _round_rule(round_number)
+        history_json = _history_json(history)
+        context_section = (
+            f"\n本次是延续已有对话的新一轮请求，请参考以下已完成的\n"
+            f"分析结论来规划本轮合适的步骤。不得重复已完成的分析，\n"
+            f"应针对新请求补充或深化已有结论。\n{conversation_context}\n"
+            if conversation_context
+            else ""
         )
         return f"""
 你是 AlphaOS Manager Agent，是编排器，不属于专家池，也不能把 manager 写入计划。
@@ -88,7 +122,14 @@ class ManagerAgent:
 不得套用固定工作流，不得只选择一个所谓主 Agent。简单目标可以只选一个专家；
 复杂目标应按实际需要构建依赖图。depends_on 为空表示可立即并行执行。
 最多生成 8 个步骤。selected_agents 必须与 steps 中实际使用的专家完全一致。
-如果关键信息不足，将 needs_clarification 设为 true，并提供 clarification_question。
+
+{round_rule}
+
+历史澄清问答（按时间顺序，可能为空列表）：
+{history_json}
+
+如果关键信息不足，将 needs_clarification 设为 true，并在 clarification_questions
+中给出 1~3 个具体、有针对性、且不与历史问题重复的问题。
 你只能选择专家和专家间依赖，绝不能选择、编排或写入专家内部的底层 Skill。
 Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Manager 不得替它们
 做这件事，plan 中不得出现 skill_id 或 a_share_stock_dossier。
@@ -127,13 +168,15 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
 只返回一个严格符合下列 JSON Schema 的 JSON 对象，不要 Markdown、解释或代码围栏：
 {schema_json}
 
-用户请求：
+{context_section}用户请求：
 {request}
 """.strip()
 
     def _repair_prompt(
         self,
         request: str,
+        clarification_history: list[ClarificationTurn],
+        round_number: int,
         invalid_response: str,
         error: str,
     ) -> str:
@@ -145,10 +188,17 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
             self.registry.prompt_payload(),
             ensure_ascii=False,
         )
+        round_rule = _round_rule(round_number)
+        history_json = _history_json(clarification_history)
         return f"""
 你上一次为 AlphaOS 生成的计划无效。仅进行这一次修复。
 保持用户目标不变，修正 JSON 语法、字段类型和任务图约束。
 只返回严格 JSON，不要 Markdown 或解释。
+
+{round_rule}
+
+历史澄清问答（按时间顺序，可能为空列表）：
+{history_json}
 
 用户请求：
 {request}
@@ -178,6 +228,32 @@ Agent 输入契约：
         if self._client is None:
             self._client = ArkClient()
         return self._client
+
+
+def _round_rule(round_number: int) -> str:
+    rule = (
+        f"当前是第 {round_number} 轮规划（1 轮 = 你一次性提出 1~3 个问题，用户回答一次，"
+        f"最多允许 {MAX_CLARIFICATION_ROUNDS} 轮）。"
+    )
+    if round_number > MAX_CLARIFICATION_ROUNDS:
+        return rule + (
+            "已经超过最大追问轮次，绝对不允许再把 needs_clarification 设为 true。"
+            "必须结合原始请求和历史问答中的全部信息，加上清楚标注的合理假设，"
+            "直接生成可执行的 steps；假设必须写进相关 step 的 objective 或 inputs 说明中。"
+        )
+    return rule + (
+        "先结合原始请求和历史问答判断信息是否已经具体（例如标的、时间区间、"
+        "任务类型等）。如果仍然不够具体，把 needs_clarification 设为 true，"
+        "selected_agents 和 steps 留空，并在 clarification_questions 中给出 1~3 个"
+        "具体、有针对性、且不与历史问题重复的问题；如果信息已经足够，正常生成计划。"
+    )
+
+
+def _history_json(history: list[ClarificationTurn]) -> str:
+    return json.dumps(
+        [turn.model_dump(mode="json") for turn in history],
+        ensure_ascii=False,
+    )
 
 
 def _extract_json(value: str) -> Any:

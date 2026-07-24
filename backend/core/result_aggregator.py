@@ -16,6 +16,7 @@ from backend.core.contracts import (
     RESEARCH_DISCLAIMER,
     ResultBlock,
     TechnicalEvidence,
+    format_clarification_questions,
 )
 from backend.core.plain_language import metric_card, plain_text, validation_label
 
@@ -253,7 +254,7 @@ class ResultAggregator:
         output_mode: OutputMode,
     ) -> DirectAnswer:
         if completion_status == "needs_clarification":
-            question = plan.clarification_question or "请补充完成任务所需的关键信息。"
+            question = format_clarification_questions(plan.clarification_questions)
             return DirectAnswer(
                 headline="需要先补充信息",
                 explanation=question,
@@ -304,6 +305,7 @@ class ResultAggregator:
         completion_status: CompletionStatus,
     ) -> list[ResultBlock]:
         if completion_status == "needs_clarification":
+            question = format_clarification_questions(plan.clarification_questions)
             return [
                 ResultBlock(
                     id="clarification",
@@ -312,8 +314,8 @@ class ResultAggregator:
                     importance="primary",
                     source_steps=[],
                     data={
-                        "question": plan.clarification_question
-                        or "请补充完成任务所需的关键信息。"
+                        "questions": plan.clarification_questions,
+                        "question": question,
                     },
                 )
             ]

@@ -677,7 +677,10 @@ def test_tasks_api_returns_v03_shape_and_full_event_lifecycle() -> None:
         "final_answer",
         "duration_ms",
         "disclaimer",
+        "conversation_id",
     }
+    assert body["conversation_id"] is not None
+    assert isinstance(body["conversation_id"], str)
     assert list(body["results"]) == ["research_1"]
     assert [event["type"] for event in body["events"]] == [
         "plan_created",
