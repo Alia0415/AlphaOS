@@ -14,6 +14,7 @@ $script:CurrentStage = "initialization"
 $script:SecretValues = @()
 $script:ArtifactDirectory = $null
 $script:UvicornProcess = $null
+$script:UvicornServerProcessId = $null
 $script:UvicornStdout = $null
 $script:UvicornStderr = $null
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -296,6 +297,46 @@ function Sanitize-File {
     }
 }
 
+function Test-IsDescendantProcess {
+    param(
+        [Parameter(Mandatory = $true)][int]$ChildProcessId,
+        [Parameter(Mandatory = $true)][int]$AncestorProcessId
+    )
+
+    $currentProcessId = $ChildProcessId
+    for ($depth = 0; $depth -lt 16 -and $currentProcessId -gt 0; $depth++) {
+        if ($currentProcessId -eq $AncestorProcessId) {
+            return $true
+        }
+        $processInfo = Get-CimInstance `
+            -ClassName Win32_Process `
+            -Filter "ProcessId = $currentProcessId" `
+            -ErrorAction SilentlyContinue
+        if ($null -eq $processInfo) {
+            return $false
+        }
+        $currentProcessId = [int]$processInfo.ParentProcessId
+    }
+    return $false
+}
+
+function Stop-TrackedProcess {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    try {
+        $process = [System.Diagnostics.Process]::GetProcessById($ProcessId)
+    }
+    catch [System.ArgumentException] {
+        return
+    }
+    if ($process.HasExited) {
+        return
+    }
+    $process.Kill()
+    Assert-Condition ($process.WaitForExit(10000)) `
+        "Process $ProcessId did not exit during cleanup."
+}
+
 $exitCode = 0
 $failure = $null
 
@@ -546,6 +587,24 @@ try {
     }
     Assert-Condition $ready "uvicorn did not become healthy within 15 seconds."
 
+    $script:CurrentStage = "identify uvicorn listener process"
+    $listeners = @(
+        Get-NetTCPConnection `
+            -LocalAddress "127.0.0.1" `
+            -LocalPort $Port `
+            -State Listen `
+            -ErrorAction Stop
+    )
+    Assert-Condition ($listeners.Count -eq 1) `
+        "Expected exactly one uvicorn listener on 127.0.0.1:$Port."
+    $listenerProcessId = [int]$listeners[0].OwningProcess
+    Assert-Condition `
+        (Test-IsDescendantProcess `
+            -ChildProcessId $listenerProcessId `
+            -AncestorProcessId $script:UvicornProcess.Id) `
+        "The healthy listener is not owned by the uvicorn process started by this script."
+    $script:UvicornServerProcessId = $listenerProcessId
+
     $health = Invoke-ApiJson `
         -Stage "check GET /api/health" `
         -Method GET `
@@ -613,10 +672,23 @@ try {
             ForEach-Object { [string]$_.agent } |
             Sort-Object -Unique
     )
+    foreach ($requiredAgent in $requiredAgents) {
+        Assert-Condition ($taskPlanAgents -contains $requiredAgent) `
+            "/api/tasks plan is missing required expert $requiredAgent."
+    }
+    Assert-Condition ($taskPlanAgents -notcontains "manager") `
+        "/api/tasks plan incorrectly placed Manager in an expert step."
 
     $resultProperties = @($taskResponse.results.PSObject.Properties)
     Assert-Condition ($resultProperties.Count -eq @($taskResponse.plan.steps).Count) `
         "/api/tasks result count does not match the dynamic plan step count."
+    $resultStepIds = @(
+        $resultProperties | ForEach-Object { [string]$_.Name }
+    )
+    foreach ($planStep in @($taskResponse.plan.steps)) {
+        Assert-Condition ($resultStepIds -contains [string]$planStep.id) `
+            "/api/tasks has no result for planned step $($planStep.id)."
+    }
     foreach ($resultProperty in $resultProperties) {
         Assert-Condition ($resultProperty.Value.status -eq "completed") `
             ("Expert step " + $resultProperty.Name + " was not completed; status=" +
@@ -674,12 +746,46 @@ catch {
 finally {
     if ($null -ne $script:UvicornProcess) {
         try {
-            $script:UvicornProcess.Refresh()
-            if (-not $script:UvicornProcess.HasExited) {
-                Stop-Process -Id $script:UvicornProcess.Id -Force
-                $script:UvicornProcess.WaitForExit()
-                Write-Host "==> Stopped the uvicorn process started by this script"
+            if ($null -eq $script:UvicornServerProcessId) {
+                $ownedListeners = @(
+                    Get-NetTCPConnection `
+                        -LocalAddress "127.0.0.1" `
+                        -LocalPort $Port `
+                        -State Listen `
+                        -ErrorAction SilentlyContinue |
+                        Where-Object {
+                            Test-IsDescendantProcess `
+                                -ChildProcessId ([int]$_.OwningProcess) `
+                                -AncestorProcessId $script:UvicornProcess.Id
+                        }
+                )
+                if ($ownedListeners.Count -eq 1) {
+                    $script:UvicornServerProcessId = [int](
+                        $ownedListeners[0].OwningProcess
+                    )
+                }
             }
+            if ($null -ne $script:UvicornServerProcessId) {
+                Stop-TrackedProcess `
+                    -ProcessId $script:UvicornServerProcessId
+            }
+            if ($script:UvicornProcess.Id -ne $script:UvicornServerProcessId) {
+                Stop-TrackedProcess -ProcessId $script:UvicornProcess.Id
+            }
+            for ($attempt = 1; $attempt -le 40; $attempt++) {
+                $remainingListener = Get-NetTCPConnection `
+                    -LocalAddress "127.0.0.1" `
+                    -LocalPort $Port `
+                    -State Listen `
+                    -ErrorAction SilentlyContinue
+                if ($null -eq $remainingListener) {
+                    break
+                }
+                Start-Sleep -Milliseconds 250
+            }
+            Assert-Condition ($null -eq $remainingListener) `
+                "The uvicorn listener started by this script is still running."
+            Write-Host "==> Stopped the uvicorn process started by this script"
         }
         catch {
             $cleanupMessage = Protect-Secrets $_.Exception.Message

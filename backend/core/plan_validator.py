@@ -95,7 +95,9 @@ _A_SHARE_SYMBOL = re.compile(r"^\d{6}\.(?:SH|SZ)$")
 def _validate_research_inputs(step: PlanStep) -> None:
     inputs = step.inputs
     scope = inputs.get("scope")
-    if scope is not None and scope not in _DOSSIER_SCOPES:
+    if scope is not None and (
+        not isinstance(scope, str) or scope not in _DOSSIER_SCOPES
+    ):
         raise PlanValidationError(
             f"Research step {step.id} has unsupported scope: {scope}"
         )

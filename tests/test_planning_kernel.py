@@ -20,6 +20,10 @@ from backend.core.contracts import (
     ExpertTask,
     RESEARCH_DISCLAIMER,
 )
+from backend.core.plan_validator import (
+    PlanValidationError,
+    validate_execution_plan,
+)
 from backend.core.workflow_executor import WorkflowExecutor
 
 
@@ -230,6 +234,80 @@ def test_manager_repairs_research_input_contract_once() -> None:
     assert "不要为了修复契约而增加不需要的专家" in client.prompts[1]
 
 
+def test_manager_repairs_list_research_scope_once() -> None:
+    invalid = _plan_payload(["research"])
+    invalid["steps"][0]["inputs"] = {
+        "symbol": "000001.SZ",
+        "scope": ["financials"],
+        "period": "2024",
+    }
+    valid = _plan_payload(["research"])
+    valid["steps"][0]["inputs"] = {
+        "symbol": "000001.SZ",
+        "scope": "financials",
+        "period": "2024",
+    }
+    client = MockArkClient(
+        json.dumps(invalid, ensure_ascii=False),
+        json.dumps(valid, ensure_ascii=False),
+    )
+
+    plan = ManagerAgent(client=client).create_plan(
+        "分析 000001.SZ 在 2024 年的财务表现"
+    )
+
+    assert len(client.prompts) == 2
+    assert plan.steps[0].inputs["scope"] == "financials"
+    assert "unsupported scope" in client.prompts[1]
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        ["financials"],
+        {"value": "financials"},
+        123,
+        True,
+        "unknown_scope",
+    ],
+)
+def test_plan_validator_rejects_invalid_research_scope_types(scope: Any) -> None:
+    payload = _plan_payload(["research"])
+    payload["steps"][0]["inputs"] = {
+        "symbol": "000001.SZ",
+        "scope": scope,
+        "period": "2024",
+    }
+    plan = ExecutionPlan.model_validate(payload)
+
+    with pytest.raises(PlanValidationError, match="unsupported scope"):
+        validate_execution_plan(plan, AgentRegistry())
+
+
+@pytest.mark.parametrize(
+    "scope",
+    ["financials", "financial_risk", "full_dossier"],
+)
+def test_plan_validator_accepts_supported_dossier_scopes(scope: str) -> None:
+    payload = _plan_payload(["research"])
+    payload["steps"][0]["inputs"] = {
+        "symbol": "000001.SZ",
+        "scope": scope,
+        "period": "2024",
+    }
+    plan = ExecutionPlan.model_validate(payload)
+
+    assert validate_execution_plan(plan, AgentRegistry()) is plan
+
+
+def test_plan_validator_accepts_none_scope_for_market_research() -> None:
+    payload = _plan_payload(["research"])
+    payload["steps"][0]["inputs"]["scope"] = None
+    plan = ExecutionPlan.model_validate(payload)
+
+    assert validate_execution_plan(plan, AgentRegistry()) is plan
+
+
 def test_manager_rejects_report_without_declared_dependency() -> None:
     invalid = _plan_payload(["report"])
     client = MockArkClient(
@@ -274,6 +352,8 @@ def test_research_calculates_metrics_in_python_and_calls_pandadata() -> None:
                 "start_date": "20240101",
                 "end_date": "20240103",
                 "fields": [],
+                "indicator": "000905",
+                "st": False,
             },
         )
     )
@@ -299,6 +379,8 @@ def test_research_calculates_metrics_in_python_and_calls_pandadata() -> None:
         "close",
         "volume",
     ]
+    assert panda.calls[0]["indicator"] == "000300"
+    assert panda.calls[0]["st"] is True
     assert result.metadata["calculation_engine"] == "python"
     assert "所有数值均已由 Python 计算" in ark.prompts[0]
     assert "不要重新计算数字" in ark.prompts[0]

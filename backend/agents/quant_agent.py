@@ -324,8 +324,8 @@ class QuantAgent:
                 start_date=str(inputs["start_date"]),
                 end_date=str(inputs["end_date"]),
                 fields=PANDADATA_FIELDS,
-                indicator=str(inputs.get("indicator", "000300")),
-                st=bool(inputs.get("st", True)),
+                indicator="000300",
+                st=True,
             )
         except Exception:
             call["status"] = "failed"

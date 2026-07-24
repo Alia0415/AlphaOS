@@ -510,6 +510,8 @@ def test_quant_agent_can_call_only_r020_with_mocked_pandadata() -> None:
                 "symbols": ["000001.SZ"],
                 "start_date": "20240101",
                 "end_date": "20240125",
+                "indicator": "000905",
+                "st": False,
             }
         )
     )
@@ -517,6 +519,8 @@ def test_quant_agent_can_call_only_r020_with_mocked_pandadata() -> None:
     assert result.status == "completed"
     assert result.metadata["actual_skills"] == ["r020_volume_expansion"]
     assert len(panda.calls) == 1
+    assert panda.calls[0]["indicator"] == "000300"
+    assert panda.calls[0]["st"] is True
     assert len(r020_adapter.calls[0].inputs["market_data"]) == 25
     assert any(call["tool"] == "pandadata_market_data" for call in result.tool_calls)
 

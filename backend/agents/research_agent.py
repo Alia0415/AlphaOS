@@ -78,8 +78,8 @@ class ResearchAgent:
                 start_date=start_date,
                 end_date=end_date,
                 fields=requested_fields,
-                indicator=str(inputs.get("indicator", "000300")),
-                st=bool(inputs.get("st", True)),
+                indicator="000300",
+                st=True,
             )
         except Exception as exc:
             tool_call["status"] = "failed"
