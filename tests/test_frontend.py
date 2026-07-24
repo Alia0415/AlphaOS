@@ -41,6 +41,18 @@ def test_frontend_assets_are_served() -> None:
     assert "renderContentBlocks" in script.text
 
 
+def test_office_user_profile_module_is_served() -> None:
+    client = TestClient(app)
+
+    profile = client.get("/static/office/js/profile.js")
+    office = client.get("/office")
+
+    assert profile.status_code == 200
+    assert "openProfileOnboarding" in profile.text
+    assert "SQLite" in profile.text
+    assert office.status_code == 200
+
+
 def test_presentation_modules_are_served() -> None:
     status = client.get("/static/presentation/status-labels.js")
     events = client.get("/static/presentation/event-labels.js")

@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS agent_overrides (
     agent_id TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS user_profiles (
+    profile_id TEXT PRIMARY KEY,
+    profile_version INTEGER NOT NULL,
+    onboarding_completed INTEGER NOT NULL,
+    profile_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -345,6 +353,64 @@ class Store:
                 (agent_id, 1 if enabled else 0),
             )
             self._conn.commit()
+
+    # -- local single-user profile ------------------------------------------
+
+    def get_user_profile(self, profile_id: str) -> dict[str, Any] | None:
+        """Read the canonical profile JSON.
+
+        ``profile_id`` is ``local-default-user`` in the hackathon MVP. It is
+        deliberately not identity data and can later be replaced by a login ID.
+        """
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT profile_json FROM user_profiles WHERE profile_id = ?",
+                (profile_id,),
+            ).fetchone()
+        return _loads(row["profile_json"]) if row is not None else None
+
+    def save_user_profile(
+        self,
+        *,
+        profile_id: str,
+        profile_version: int,
+        onboarding_completed: bool,
+        profile: dict[str, Any],
+        created_at: str,
+        updated_at: str,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO user_profiles "
+                "(profile_id, profile_version, onboarding_completed, "
+                "profile_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(profile_id) DO UPDATE SET "
+                "profile_version = excluded.profile_version, "
+                "onboarding_completed = excluded.onboarding_completed, "
+                "profile_json = excluded.profile_json, "
+                "created_at = excluded.created_at, "
+                "updated_at = excluded.updated_at",
+                (
+                    profile_id,
+                    profile_version,
+                    1 if onboarding_completed else 0,
+                    _dumps(profile),
+                    created_at,
+                    updated_at,
+                ),
+            )
+            self._conn.commit()
+
+    def delete_user_profile(self, profile_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM user_profiles WHERE profile_id = ?",
+                (profile_id,),
+            )
+            self._conn.commit()
+        return cursor.rowcount > 0
 
     # -- overview ------------------------------------------------------------
 

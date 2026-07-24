@@ -35,6 +35,7 @@ class ManagerAgent:
         self,
         task_spec: TaskSpec | str,
         original_user_request: str | None = None,
+        profile_context: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         """Plan from a validated TaskSpec.
 
@@ -51,7 +52,11 @@ class ManagerAgent:
         if not request:
             raise ManagerAgentError("规划请求不能为空。")
 
-        prompt = self._planning_prompt(normalized_spec, request)
+        prompt = self._planning_prompt(
+            normalized_spec,
+            request,
+            profile_context,
+        )
         try:
             raw_response = self._get_client().chat(prompt)
         except ArkClientError as exc:
@@ -63,6 +68,7 @@ class ManagerAgent:
             repair_prompt = self._repair_prompt(
                 request=request,
                 task_spec=normalized_spec,
+                profile_context=profile_context,
                 invalid_response=raw_response,
                 error=str(exc),
             )
@@ -117,6 +123,7 @@ class ManagerAgent:
         self,
         task_spec: TaskSpec | str,
         request: str | None = None,
+        profile_context: dict[str, Any] | None = None,
     ) -> str:
         if isinstance(task_spec, str):
             request = task_spec if request is None else request
@@ -133,6 +140,11 @@ class ManagerAgent:
         )
         task_spec_json = json.dumps(
             task_spec.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+        profile_context_json = json.dumps(
+            profile_context or {},
             ensure_ascii=False,
             indent=2,
         )
@@ -162,6 +174,10 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
 持有、目标收益或当前仓位建议。Portfolio 当前禁用且不得出现在计划中。
 若 task_type=personal_investment_decision，只能规划支持决策所需的事实研究与风险分析；
 不得把个人资金情况转写成证券、行业或仓位建议，也不得绕过 TaskSpec 的澄清要求。
+用户画像不是 Expert，不得加入 selected_agents、steps 或 AgentRegistry。
+个人画像摘要只用于判断现实约束；不得生成“保守型、稳健型、激进型”等综合标签，
+不得仅凭投资经验推高风险承受能力。Research、Macro、Quant 不得接收收入、支出、
+债务或完整画像；应用层只会将最小脱敏摘要注入确有需要的 Risk step。
 
 始终选择完成任务所需的最小充分专家集合：
 - 不得因为某个专家已实现就选择它；
@@ -207,12 +223,16 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
 
 原始用户文本（仅作上下文）：
 {request}
+
+个人任务最小画像摘要（非个人任务为空对象；null 表示未知，不得猜测）：
+{profile_context_json}
 """.strip()
 
     def _repair_prompt(
         self,
         request: str,
         task_spec: TaskSpec,
+        profile_context: dict[str, Any] | None,
         invalid_response: str,
         error: str,
     ) -> str:
@@ -228,6 +248,10 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
             task_spec.model_dump(mode="json"),
             ensure_ascii=False,
         )
+        profile_context_json = json.dumps(
+            profile_context or {},
+            ensure_ascii=False,
+        )
         return f"""
 你上一次为 AlphaOS 生成的计划无效。仅进行这一次修复。
 保持用户目标不变，修正 JSON 语法、字段类型和任务图约束。
@@ -238,6 +262,9 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
 
 不可覆盖的 TaskSpec：
 {task_spec_json}
+
+最小用户画像摘要（不得广播给 Research、Macro 或 Quant）：
+{profile_context_json}
 
 验证错误：
 {error}

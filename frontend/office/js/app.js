@@ -3,6 +3,11 @@
 // Demo data comes from mock.js; every demo value stays labelled DEMO in UI.
 import { store } from "./store.js";
 import {
+  maybeStartProfileOnboarding,
+  mountProfilePage,
+  openProfileOnboarding,
+} from "./profile.js?v=20260724-p03";
+import {
   AGENTS,
   REPORTS,
   SOON_PAGES,
@@ -126,6 +131,7 @@ const NAV = [
   { route: "tasks", ico: "🗂", label: "任务中心" },
   { route: "experts", ico: "👥", label: "专家中心" },
   { route: "reports", ico: "📑", label: "研究报告" },
+  { route: "profile", ico: "🪪", label: "用户画像" },
   { sep: true },
   { route: "skills", ico: "🧩", label: "Skills" },
   { route: "data-market", ico: "🗄", label: "数据市场" },
@@ -192,7 +198,7 @@ function renderTopbar() {
 
   const avaBtn = el("button", "avatar-btn");
   avaBtn.appendChild(avatar("user", 34, "pix-ava"));
-  avaBtn.addEventListener("click", () => toast("当前用户：演示账户"));
+  avaBtn.addEventListener("click", () => navigate("profile"));
   bar.appendChild(avaBtn);
 }
 
@@ -398,6 +404,9 @@ function renderPage() {
       break;
     case "tasks":
       page.appendChild(pageTasks());
+      break;
+    case "profile":
+      mountProfilePage(page, toast);
       break;
     default:
       page.appendChild(pageSoon(currentRoute));
@@ -1765,8 +1774,10 @@ function boot() {
   // expose the router so hall hero / LIVE-office previews can jump into the
   // clarify + war-room sub-flows (which have no top-level nav entry).
   window.__navigate = navigate;
+  window.__openProfileOnboarding = () => openProfileOnboarding(toast);
   // land directly on the report follow-up view (matches the design)
   navigate("reports", REPORTS[0].id);
+  maybeStartProfileOnboarding(toast);
   setInterval(renderStatusbar, 30_000);
 }
 

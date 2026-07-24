@@ -8,11 +8,11 @@ import re
 import uuid
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,7 +22,7 @@ from backend.agents.router_agent import (
     RouterAgentError,
 )
 from backend.agents.manager_agent import ManagerAgent, ManagerAgentError
-from backend.core.agent_registry import DEFAULT_EXPERTS, AgentRegistry
+from backend.core.agent_registry import DEFAULT_EXPERTS
 from backend.core.contracts import (
     AgentId,
     ExecutionEvent,
@@ -41,12 +41,20 @@ from backend.core.contracts import (
 )
 from backend.core.evidence_validator import EvidenceValidator
 from backend.core.policy_gate import PolicyGate
+from backend.core.profile_service import UserProfileService
 from backend.core.registry_factory import build_registry
 from backend.core.reporting import build_report_record
 from backend.core.result_aggregator import ResultAggregator
 from backend.core.result_policy_checker import ResultPolicyChecker
 from backend.core.store import get_store
 from backend.core.task_interpreter import TaskInterpreter
+from backend.core.task_spec import TaskSpec
+from backend.core.user_profile import (
+    PERSONAL_DECISION_REQUIRED_FIELDS,
+    UserInvestmentProfile,
+    UserProfilePatch,
+    UserProfilePut,
+)
 from backend.core.workflow_executor import WorkflowExecutor
 from backend.services.pandadata_client import (
     PandaDataClient,
@@ -129,7 +137,14 @@ class FollowupRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     task_id: str
-    plan: ExecutionPlan
+    plan: ExecutionPlan | None
+    action_required: str | None = None
+    required_profile_fields: list[str] = Field(default_factory=list)
+
+
+class UserProfileEnvelope(BaseModel):
+    profile: UserInvestmentProfile | None
+    derived_metrics: dict[str, int | float | None] = Field(default_factory=dict)
 
 
 class MarketDataRequest(BaseModel):
@@ -188,6 +203,31 @@ async def health() -> dict[str, str]:
 @app.get("/api/pandadata/status")
 async def pandadata_status() -> dict[str, object]:
     return pandadata.status()
+
+
+@app.get("/api/user-profile", response_model=UserProfileEnvelope)
+async def get_user_profile() -> UserProfileEnvelope:
+    return _profile_envelope(_profile_service().get())
+
+
+@app.put("/api/user-profile", response_model=UserProfileEnvelope)
+async def put_user_profile(request: UserProfilePut) -> UserProfileEnvelope:
+    return _profile_envelope(_profile_service().put(request))
+
+
+@app.patch("/api/user-profile", response_model=UserProfileEnvelope)
+async def patch_user_profile(request: UserProfilePatch) -> UserProfileEnvelope:
+    return _profile_envelope(_profile_service().patch(request))
+
+
+@app.delete("/api/user-profile")
+async def delete_user_profile() -> dict[str, bool]:
+    return {"deleted": _profile_service().delete()}
+
+
+@app.get("/api/user-profile/status")
+async def user_profile_status() -> dict[str, Any]:
+    return _profile_service().status()
 
 
 # -- read-only surfaces ------------------------------------------------------
@@ -312,11 +352,50 @@ async def set_expert_enabled(
 
 @app.post("/api/tasks/sessions", response_model=SessionResponse)
 async def create_session(request: RouteRequest) -> SessionResponse:
+    task_id = uuid.uuid4().hex
+    policy = policy_gate.evaluate(request.prompt)
+    if not policy.allowed:
+        raise HTTPException(status_code=422, detail=policy.safe_response)
+    task_spec = task_interpreter.interpret(request.prompt, policy)
+    profile_summary: dict[str, Any] | None = None
+    if task_spec.task_type == "personal_investment_decision":
+        profile = _profile_service().get()
+        if profile is None or not profile.onboarding_completed:
+            return _create_profile_action_session(
+                task_id,
+                request.prompt,
+                "profile_onboarding_required",
+                list(PERSONAL_DECISION_REQUIRED_FIELDS),
+            )
+        missing = profile.missing_fields(PERSONAL_DECISION_REQUIRED_FIELDS)
+        if missing:
+            return _create_profile_action_session(
+                task_id,
+                request.prompt,
+                "profile_update_required",
+                missing,
+            )
+        profile_summary = profile.risk_summary()
     try:
-        plan = await run_in_threadpool(manager.create_plan, request.prompt)
+        if profile_summary is None:
+            plan = await run_in_threadpool(manager.create_plan, request.prompt)
+        else:
+            task_spec = task_spec.model_copy(
+                update={
+                    "missing_fields": [],
+                    "execution_decision": "execute_with_defaults",
+                    "clarification_question": None,
+                }
+            )
+            plan = await run_in_threadpool(
+                manager.create_plan,
+                task_spec,
+                request.prompt,
+                profile_summary,
+            )
+            plan = _attach_profile_to_risk(plan, profile_summary)
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    task_id = uuid.uuid4().hex
     status = "needs_clarification" if plan.needs_clarification else "planned"
     store.create_task(
         task_id=task_id,
@@ -355,6 +434,14 @@ async def clarify_session(task_id: str, request: ClarifyRequest) -> SessionRespo
     task = store.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
+    if task["status"] in {
+        "profile_onboarding_required",
+        "profile_update_required",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="请先在用户画像页面完成所需更新，再重新提交个人投资任务。",
+        )
     try:
         plan = await run_in_threadpool(
             manager.resume,
@@ -604,6 +691,35 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
             )
 
         task_spec = task_interpreter.interpret(request.prompt, policy)
+        profile: UserInvestmentProfile | None = None
+        profile_summary: dict[str, Any] | None = None
+        if task_spec.task_type == "personal_investment_decision":
+            profile = _profile_service().get()
+            if profile is None or not profile.onboarding_completed:
+                return _profile_action_task_response(
+                    task_spec,
+                    action="profile_onboarding_required",
+                    missing_fields=list(PERSONAL_DECISION_REQUIRED_FIELDS),
+                    started_at=started_at,
+                )
+            missing_profile_fields = profile.missing_fields(
+                PERSONAL_DECISION_REQUIRED_FIELDS
+            )
+            if missing_profile_fields:
+                return _profile_action_task_response(
+                    task_spec,
+                    action="profile_update_required",
+                    missing_fields=missing_profile_fields,
+                    started_at=started_at,
+                )
+            task_spec = task_spec.model_copy(
+                update={
+                    "missing_fields": [],
+                    "execution_decision": "execute_with_defaults",
+                    "clarification_question": None,
+                }
+            )
+            profile_summary = profile.risk_summary()
         if task_spec.execution_decision == "clarify":
             aggregation = result_policy_checker.check(
                 result_aggregator.build_clarification_response(task_spec)
@@ -637,11 +753,20 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
                 disclaimer=RESEARCH_DISCLAIMER,
             )
 
-        plan = await run_in_threadpool(
-            manager.create_plan,
-            task_spec,
-            request.prompt,
-        )
+        if profile_summary is None:
+            plan = await run_in_threadpool(
+                manager.create_plan,
+                task_spec,
+                request.prompt,
+            )
+        else:
+            plan = await run_in_threadpool(
+                manager.create_plan,
+                task_spec,
+                request.prompt,
+                profile_summary,
+            )
+            plan = _attach_profile_to_risk(plan, profile_summary)
         status = "needs_clarification" if plan.needs_clarification else "running"
         store.create_task(
             task_id=task_id,
@@ -792,6 +917,167 @@ async def market_data(request: MarketDataRequest) -> MarketDataResponse:
 
 
 # -- helpers -----------------------------------------------------------------
+
+
+def _profile_service() -> UserProfileService:
+    return UserProfileService(store)
+
+
+def _profile_envelope(
+    profile: UserInvestmentProfile | None,
+) -> UserProfileEnvelope:
+    if profile is None:
+        return UserProfileEnvelope(profile=None)
+    return UserProfileEnvelope(
+        profile=profile,
+        derived_metrics={
+            "monthly_surplus_cny": profile.monthly_surplus_cny,
+            "essential_cash_outflow_cny": profile.essential_cash_outflow_cny,
+            "savings_rate": profile.savings_rate,
+            "emergency_fund_months": profile.emergency_fund_months,
+            "debt_payment_ratio": profile.debt_payment_ratio,
+            "known_portfolio_value_cny": profile.known_portfolio_value_cny,
+            "largest_position_ratio": profile.largest_position_ratio,
+            "profile_completeness": profile.profile_completeness,
+        },
+    )
+
+
+def _profile_action_task_response(
+    task_spec: TaskSpec,
+    *,
+    action: Literal[
+        "profile_onboarding_required",
+        "profile_update_required",
+    ],
+    missing_fields: list[str],
+    started_at: float,
+) -> JSONResponse:
+    onboarding = action == "profile_onboarding_required"
+    explanation = (
+        "这是个人投资决策。请先进入“用户画像”完成一次建档；"
+        "建档会确认投资期限、应急资金、收入支出和最大亏损边界。"
+        "画像完成前不会创建专家任务图，也不会给出买卖或具体仓位建议。"
+        if onboarding
+        else "当前个人投资任务仍缺少必要画像字段："
+        + "、".join(missing_fields)
+        + "。请在“用户画像”页面补充这些字段，不会重新启动整套问卷。"
+    )
+    clarification = task_spec.model_copy(
+        update={
+            "missing_fields": missing_fields,
+            "execution_decision": "clarify",
+            "clarification_question": explanation,
+        }
+    )
+    aggregation = result_policy_checker.check(
+        result_aggregator.build_clarification_response(clarification)
+    )
+    aggregation = aggregation.model_copy(
+        update={
+            "direct_answer": aggregation.direct_answer.model_copy(
+                update={
+                    "headline": (
+                        "需要先完成用户画像"
+                        if onboarding
+                        else "需要补充用户画像"
+                    ),
+                    "explanation": explanation,
+                }
+            )
+        }
+    )
+    duration_ms = max(0, round((perf_counter() - started_at) * 1000))
+    events = [
+        ExecutionEvent(
+            type="clarification_required",
+            message=explanation,
+            metadata={
+                "action_required": action,
+                "missing_fields": missing_fields,
+            },
+        ),
+        ExecutionEvent(
+            type="task_completed",
+            message="AlphaOS 已在创建任务图前暂停个人投资决策。",
+            metadata={"completed_steps": 0, "failed_steps": 0},
+        ),
+    ]
+    response = TaskExecutionResponse(
+        plan=None,
+        events=events,
+        results={},
+        aggregation=aggregation,
+        final_answer=f"{aggregation.direct_answer.headline}\n\n{explanation}",
+        duration_ms=duration_ms,
+        disclaimer=RESEARCH_DISCLAIMER,
+    )
+    return JSONResponse(
+        content={
+            **response.model_dump(mode="json"),
+            "action_required": action,
+            "required_profile_fields": missing_fields,
+        }
+    )
+
+
+def _create_profile_action_session(
+    task_id: str,
+    prompt: str,
+    action: Literal[
+        "profile_onboarding_required",
+        "profile_update_required",
+    ],
+    missing_fields: list[str],
+) -> SessionResponse:
+    message = (
+        "请先完成首次用户画像建档。"
+        if action == "profile_onboarding_required"
+        else "请在用户画像页面补充当前任务所需字段。"
+    )
+    store.create_task(
+        task_id=task_id,
+        prompt=prompt,
+        status=action,
+        plan=None,
+    )
+    store.append_event(
+        task_id,
+        type="clarification_required",
+        message=message,
+        metadata={
+            "action_required": action,
+            "missing_fields": missing_fields,
+        },
+    )
+    return SessionResponse(
+        task_id=task_id,
+        plan=None,
+        action_required=action,
+        required_profile_fields=missing_fields,
+    )
+
+
+def _attach_profile_to_risk(
+    plan: ExecutionPlan,
+    summary: dict[str, Any],
+) -> ExecutionPlan:
+    """Attach the minimal canonical summary only to selected Risk steps."""
+
+    steps = [
+        step.model_copy(
+            update={
+                "inputs": {
+                    **step.inputs,
+                    "risk_context": summary,
+                }
+            }
+        )
+        if step.agent == AgentId.RISK
+        else step
+        for step in plan.steps
+    ]
+    return plan.model_copy(update={"steps": steps})
 
 
 def _event_to_dict(event: ExecutionEvent) -> dict[str, Any]:

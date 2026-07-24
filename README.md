@@ -351,3 +351,22 @@ Not currently supported:
 
 All output is research-only and does not constitute investment advice,
 security recommendations, or a return promise.
+## 用户画像（P0-3）
+
+Office 的“用户画像”页面通过以下 API 读写画像：
+
+- `GET /api/user-profile`
+- `PUT /api/user-profile`
+- `PATCH /api/user-profile`
+- `DELETE /api/user-profile`
+- `GET /api/user-profile/status`
+
+画像以 SQLite `user_profiles` 表为正式事实源；浏览器 localStorage 只保存首次建档的
+当前步骤，不保存或提交完整画像快照。当前黑客松 MVP 没有登录体系，因此使用
+`local-default-user` 作为明确命名的本地单用户标识。它不支持跨设备同步，不是身份
+标识，也不会保存姓名、身份证、银行卡、手机号或精确地址；接入登录体系后可替换为
+真实登录用户 ID。
+
+普通行情、公司、财报、行业、宏观、量化和独立风险研究不依赖画像。只有
+`personal_investment_decision` 会在创建 DAG 前检查首次建档和当前任务必要字段；
+画像摘要仅按需注入 Risk step，不会广播给 Research、Macro 或 Quant。
