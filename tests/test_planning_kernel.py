@@ -206,6 +206,41 @@ def test_manager_accepts_quant_and_rejects_still_disabled_expert() -> None:
         manager.create_plan("构建组合")
 
 
+def test_manager_repairs_research_input_contract_once() -> None:
+    invalid = _plan_payload(["research"])
+    invalid["steps"][0]["inputs"] = {
+        "symbol": "000001.SZ",
+        "start_date": "20240101",
+        "end_date": "20241231",
+        "fields": ["price", "volume", "fundamental_metrics"],
+    }
+    valid = _plan_payload(["research"])
+    client = MockArkClient(
+        json.dumps(invalid, ensure_ascii=False),
+        json.dumps(valid, ensure_ascii=False),
+    )
+
+    plan = ManagerAgent(client=client).create_plan(
+        "分析 000001.SZ 在 2024 年的表现"
+    )
+
+    assert len(client.prompts) == 2
+    assert plan.steps[0].inputs["symbols"] == ["000001.SZ"]
+    assert "must use inputs.symbols as a list" in client.prompts[1]
+    assert "不要为了修复契约而增加不需要的专家" in client.prompts[1]
+
+
+def test_manager_rejects_report_without_declared_dependency() -> None:
+    invalid = _plan_payload(["report"])
+    client = MockArkClient(
+        json.dumps(invalid, ensure_ascii=False),
+        json.dumps(invalid, ensure_ascii=False),
+    )
+
+    with pytest.raises(ManagerAgentError):
+        ManagerAgent(client=client).create_plan("生成研究报告")
+
+
 def test_research_calculates_metrics_in_python_and_calls_pandadata() -> None:
     data = [
         {
@@ -252,6 +287,18 @@ def test_research_calculates_metrics_in_python_and_calls_pandadata() -> None:
     assert metrics["highest_close"] == 110
     assert metrics["lowest_close"] == 99
     assert panda.calls[0]["symbols"] == ["000001.SZ"]
+    assert panda.calls[0]["fields"] == [
+        "trade_date",
+        "symbol",
+        "close",
+        "volume",
+    ]
+    assert result.tool_calls[0]["arguments"]["fields"] == [
+        "trade_date",
+        "symbol",
+        "close",
+        "volume",
+    ]
     assert result.metadata["calculation_engine"] == "python"
     assert "所有数值均已由 Python 计算" in ark.prompts[0]
     assert "不要重新计算数字" in ark.prompts[0]

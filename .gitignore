@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv-smoke/
 .runtime_skills/
 node_modules/
 dist/
@@ -14,4 +15,5 @@ logs/
 *.log
 .coverage
 htmlcov/
+smoke-artifacts/
 

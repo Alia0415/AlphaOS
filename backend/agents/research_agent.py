@@ -69,7 +69,7 @@ class ResearchAgent:
                 "symbols": symbols,
                 "start_date": start_date,
                 "end_date": end_date,
-                "fields": fields,
+                "fields": requested_fields,
             },
         }
         try:
@@ -77,7 +77,7 @@ class ResearchAgent:
                 symbols=symbols,
                 start_date=start_date,
                 end_date=end_date,
-                fields=fields,
+                fields=requested_fields,
                 indicator=str(inputs.get("indicator", "000300")),
                 st=bool(inputs.get("st", True)),
             )

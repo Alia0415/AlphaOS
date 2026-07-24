@@ -102,7 +102,10 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
 - report 不是默认必经节点，risk 也不是默认必经节点；
 - 不得生成 research→risk→report 或其他固定模板；依赖只能来自当前目标的业务需要；
 - 每个 step.inputs 必须填写该专家需要的结构化输入。市场研究应提取 symbols、
-  start_date、end_date、fields，日期格式为 YYYYMMDD。
+  start_date、end_date、fields，日期格式为 YYYYMMDD。symbols 必须始终是列表，
+  不能写成单数 symbol；fields 为空列表时 Research 使用默认字段，否则必须至少包含
+  trade_date、symbol、close、volume，绝不能使用 price、financials、
+  fundamental_metrics 等概念名代替真实字段；
 - 单公司财报、基本面、尽调和财务风险问题只选择 research；应提取 symbol、
   period、scope、focus 和 research_goal。只问财报时 scope=financials，全面尽调时
   scope=full_dossier。Manager 仍然只能选择 research，绝不能写入底层 Skill；
@@ -161,6 +164,14 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
 
 当前唯一可用的专家注册表（不得使用列表外或 enabled=false 的专家）：
 {registry_json}
+
+Agent 输入契约：
+- 市场 Research 必须使用 symbols 列表、YYYYMMDD 的 start_date/end_date；fields
+  为空列表或至少包含 trade_date、symbol、close、volume；
+- 财报/尽调 Research 才能使用 symbol，并必须提供 financials、financial_risk
+  或 full_dossier scope；
+- Report 必须声明至少一个上游 depends_on；
+- 不要为了修复契约而增加不需要的专家或改成固定流程。
 """.strip()
 
     def _get_client(self) -> ArkClient:
