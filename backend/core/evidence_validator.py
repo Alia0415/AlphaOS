@@ -7,6 +7,7 @@ from typing import Any, Mapping
 from pydantic import BaseModel, Field
 
 from backend.core.contracts import ExecutionPlan, ExpertResult, ValidationStatus
+from backend.core.personal_constraint_evaluator import PersonalConstraintResult
 from backend.core.task_spec import TaskSpec
 
 
@@ -62,6 +63,7 @@ class EvidenceValidationResult(BaseModel):
     missing_evidence: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     data_scope: list[dict[str, Any]] = Field(default_factory=list)
+    personal_constraints: PersonalConstraintResult | None = None
 
 
 class EvidenceValidator:
@@ -87,6 +89,19 @@ class EvidenceValidator:
         limitations: list[EvidenceItem] = []
         data_scope: list[dict[str, Any]] = []
         statuses: list[ValidationStatus] = []
+        personal_constraints = (
+            plan.personal_context.constraints
+            if plan.personal_context is not None
+            else None
+        )
+
+        if task_spec.task_type == "personal_investment_decision":
+            if personal_constraints is None:
+                missing.append("个人投资决策缺少确定性的个人约束证据")
+            else:
+                warnings.extend(personal_constraints.warnings)
+                if personal_constraints.status == "insufficient_information":
+                    missing.append("个人约束评估缺少本次任务的关键画像字段")
 
         for step_id in normalized.keys() - step_by_id.keys():
             warnings.append(f"忽略计划外结果：{step_id}")
@@ -180,6 +195,7 @@ class EvidenceValidator:
             missing_evidence=list(dict.fromkeys(missing)),
             warnings=list(dict.fromkeys(warnings)),
             data_scope=_unique_dicts(data_scope),
+            personal_constraints=personal_constraints,
         )
 
 

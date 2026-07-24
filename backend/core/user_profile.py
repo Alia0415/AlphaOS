@@ -39,23 +39,6 @@ PROFILE_FACT_FIELDS = (
     "investment_experience",
 )
 
-PERSONAL_DECISION_REQUIRED_FIELDS = (
-    "monthly_after_tax_income_cny",
-    "income_stability",
-    "monthly_essential_expenses_cny",
-    "monthly_debt_payment_cny",
-    "dependents_count",
-    "emergency_fund_cny",
-    "planned_large_expenses_cny",
-    "planned_large_expenses_within_months",
-    "available_investment_funds_cny",
-    "investment_horizon_months",
-    "liquidity_need",
-    "max_acceptable_loss_ratio",
-    "existing_positions",
-)
-
-
 class ExistingPosition(BaseModel):
     """One user-reported holding without inferred values."""
 

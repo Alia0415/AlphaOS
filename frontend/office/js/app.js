@@ -2152,7 +2152,11 @@ function buildReportMainLive(report) {
     const bp = el("div", "panel");
     bp.appendChild(el("div", "follow-sec-title", esc(b.title || b.type || "内容块")));
     if (b.description) bp.appendChild(el("p", "", `<span style="color:var(--text-2);line-height:1.7">${esc(b.description)}</span>`));
-    bp.appendChild(renderBlockData(b.data));
+    bp.appendChild(
+      b.type === "personal_constraints"
+        ? renderPersonalConstraintData(b.data || {})
+        : renderBlockData(b.data),
+    );
     col.appendChild(bp);
   });
 
@@ -2296,6 +2300,44 @@ function boot() {
   }
   maybeStartProfileOnboarding(toast);
   setInterval(renderStatusbar, 30_000);
+}
+
+function renderPersonalConstraintData(data) {
+  const wrap = el("div");
+  const summary = el("div", "metric-grid");
+  [
+    ["评估状态", data.status || "—"],
+    ["承受能力边界", data.capacity_level || "unable_to_grade"],
+    ["使用字段", (data.fields_used || []).join("、") || "无"],
+    ["缺失字段", (data.missing_critical_fields || []).join("、") || "无"],
+  ].forEach(([label, value]) => {
+    summary.appendChild(
+      el(
+        "div",
+        "metric-card",
+        `<span>${esc(label)}</span><strong>${esc(value)}</strong>`,
+      ),
+    );
+  });
+  wrap.appendChild(summary);
+  (data.constraints || []).forEach((item) => {
+    wrap.appendChild(
+      el(
+        "div",
+        "skill-row",
+        `<span>${esc(item.category || "约束")} · ${esc(item.severity || "")}</span>` +
+          `<span>${esc(item.statement || "")} ${esc(item.basis || "")}</span>`,
+      ),
+    );
+  });
+  wrap.appendChild(
+    el(
+      "p",
+      "op-note",
+      "原始敏感数值不会进入结果，也不会传给 Research、Quant 或 Macro。",
+    ),
+  );
+  return wrap;
 }
 
 boot();

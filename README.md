@@ -33,6 +33,24 @@ blocks. The frontend renders only returned blocks, so an uncalled expert never
 creates an empty or implied section. Complete expert results remain available
 under `aggregation.technical_evidence`.
 
+Personal investment research has an additional deterministic, non-Agent
+governance layer before Manager planning:
+
+```text
+PolicyGate → TaskInterpreter → ProfileRequirementResolver
+→ PersonalConstraintEvaluator → Manager dynamic DAG
+→ EvidenceValidator → ResultAggregator
+```
+
+Only task-relevant profile fields are requested. The evaluator emits
+value-minimized constraint evidence and never assigns investor personality
+labels. Personal constraints remain present in the final
+`personal_constraints` result block even when Manager does not select Risk.
+Research, Quant, and Macro never receive profile fields. When Risk is selected,
+its explicit mode is one of `personal_capacity`, `strategy_risk`, or
+`market_risk`; personal mode explains deterministic constraints and does not
+substitute strategy-risk language.
+
 The enabled expert pool is:
 
 | Expert | Enabled | Current responsibility |

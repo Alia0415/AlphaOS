@@ -97,7 +97,7 @@ DEFAULT_EXPERTS = (
         description="独立或结合上游证据进行风险、假设和失败模式审查",
         enabled=True,
         tools=(),
-        accepted_inputs=("strategy", "thesis", "risk_context"),
+        accepted_inputs=("strategy", "thesis", "risk_context", "risk_mode"),
         capabilities=("risk_review", "stress_testing", "assumption_review"),
     ),
     AgentDefinition(

@@ -41,6 +41,11 @@ from backend.core.contracts import (
 )
 from backend.core.evidence_validator import EvidenceValidator
 from backend.core.policy_gate import PolicyGate
+from backend.core.personal_decision_context import (
+    PersonalDecisionContext,
+    PersonalDecisionContextBuilder,
+)
+from backend.core.profile_requirement_resolver import ProfileFieldRequirements
 from backend.core.profile_service import UserProfileService
 from backend.core.registry_factory import build_registry
 from backend.core.reporting import build_report_record
@@ -50,7 +55,6 @@ from backend.core.store import get_store
 from backend.core.task_interpreter import TaskInterpreter
 from backend.core.task_spec import TaskSpec
 from backend.core.user_profile import (
-    PERSONAL_DECISION_REQUIRED_FIELDS,
     UserInvestmentProfile,
     UserProfilePatch,
     UserProfilePut,
@@ -86,6 +90,7 @@ policy_gate = PolicyGate()
 task_interpreter = TaskInterpreter()
 evidence_validator = EvidenceValidator()
 result_policy_checker = ResultPolicyChecker()
+personal_context_builder = PersonalDecisionContextBuilder()
 manager = ManagerAgent(registry=build_registry(store))
 workflow_executor = WorkflowExecutor(registry=build_registry(store))
 
@@ -140,6 +145,7 @@ class SessionResponse(BaseModel):
     plan: ExecutionPlan | None
     action_required: str | None = None
     required_profile_fields: list[str] = Field(default_factory=list)
+    profile_requirements: dict[str, Any] | None = None
 
 
 class UserProfileEnvelope(BaseModel):
@@ -357,43 +363,38 @@ async def create_session(request: RouteRequest) -> SessionResponse:
     if not policy.allowed:
         raise HTTPException(status_code=422, detail=policy.safe_response)
     task_spec = task_interpreter.interpret(request.prompt, policy)
-    profile_summary: dict[str, Any] | None = None
-    if task_spec.task_type == "personal_investment_decision":
-        profile = _profile_service().get()
-        if profile is None or not profile.onboarding_completed:
-            return _create_profile_action_session(
-                task_id,
-                request.prompt,
-                "profile_onboarding_required",
-                list(PERSONAL_DECISION_REQUIRED_FIELDS),
-            )
-        missing = profile.missing_fields(PERSONAL_DECISION_REQUIRED_FIELDS)
-        if missing:
-            return _create_profile_action_session(
-                task_id,
-                request.prompt,
-                "profile_update_required",
-                missing,
-            )
-        profile_summary = profile.risk_summary()
+    personal_context, action = _prepare_personal_context(task_spec)
+    if action is not None:
+        action_name, requirements = action
+        return _create_profile_action_session(
+            task_id,
+            request.prompt,
+            action_name,
+            requirements,
+        )
+    if personal_context is not None:
+        task_spec = task_spec.model_copy(
+            update={
+                "missing_fields": [],
+                "execution_decision": "execute_with_defaults",
+                "clarification_question": None,
+            }
+        )
     try:
-        if profile_summary is None:
-            plan = await run_in_threadpool(manager.create_plan, request.prompt)
-        else:
-            task_spec = task_spec.model_copy(
-                update={
-                    "missing_fields": [],
-                    "execution_decision": "execute_with_defaults",
-                    "clarification_question": None,
-                }
-            )
+        if personal_context is None:
             plan = await run_in_threadpool(
                 manager.create_plan,
                 task_spec,
                 request.prompt,
-                profile_summary,
             )
-            plan = _attach_profile_to_risk(plan, profile_summary)
+        else:
+            plan = await run_in_threadpool(
+                manager.create_plan,
+                task_spec,
+                request.prompt,
+                personal_context.minimal_summary(),
+            )
+            plan = _attach_personal_context(plan, personal_context)
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     status = "needs_clarification" if plan.needs_clarification else "planned"
@@ -434,24 +435,67 @@ async def clarify_session(task_id: str, request: ClarifyRequest) -> SessionRespo
     task = store.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if task["status"] in {
-        "profile_onboarding_required",
-        "profile_update_required",
-    }:
-        raise HTTPException(
-            status_code=409,
-            detail="请先在用户画像页面完成所需更新，再重新提交个人投资任务。",
+    resumed_prompt = _fold_clarification_answers(task["prompt"], request.answers)
+    policy = policy_gate.evaluate(resumed_prompt)
+    if not policy.allowed:
+        raise HTTPException(status_code=422, detail=policy.safe_response)
+    task_spec = task_interpreter.interpret(resumed_prompt, policy)
+    personal_context, action = _prepare_personal_context(task_spec)
+    if action is not None:
+        action_name, requirements = action
+        store.update_task_request(
+            task_id,
+            prompt=resumed_prompt,
+            status=action_name,
+            plan=None,
+        )
+        store.append_event(
+            task_id,
+            type="clarification_required",
+            message="用户画像更新后，本次任务仍缺少必要字段。",
+            metadata={
+                "action_required": action_name,
+                "missing_fields": requirements.missing,
+                "required_fields": requirements.required,
+            },
+        )
+        return SessionResponse(
+            task_id=task_id,
+            plan=None,
+            action_required=action_name,
+            required_profile_fields=requirements.missing,
+            profile_requirements=requirements.model_dump(mode="json"),
+        )
+    if personal_context is not None:
+        task_spec = task_spec.model_copy(
+            update={
+                "missing_fields": [],
+                "execution_decision": "execute_with_defaults",
+                "clarification_question": None,
+            }
         )
     try:
         plan = await run_in_threadpool(
-            manager.resume,
-            task["prompt"],
-            request.answers,
+            manager.create_plan,
+            task_spec,
+            resumed_prompt,
+            (
+                personal_context.minimal_summary()
+                if personal_context is not None
+                else None
+            ),
         )
+        if personal_context is not None:
+            plan = _attach_personal_context(plan, personal_context)
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     status = "needs_clarification" if plan.needs_clarification else "planned"
-    store.update_task_plan(task_id, status=status, plan=plan.model_dump(mode="json"))
+    store.update_task_request(
+        task_id,
+        prompt=resumed_prompt,
+        status=status,
+        plan=plan.model_dump(mode="json"),
+    )
     store.append_event(
         task_id,
         type="plan_created",
@@ -538,8 +582,23 @@ async def stream_task(task_id: str) -> StreamingResponse:
         _persist_event(task_id, synthesis)
         yield _sse(_event_to_dict(synthesis))
 
+        policy = policy_gate.evaluate(prompt)
+        task_spec = task_interpreter.interpret(prompt, policy)
+        evidence_validation = await run_in_threadpool(
+            evidence_validator.validate,
+            task_spec,
+            plan,
+            results,
+        )
         aggregation = await run_in_threadpool(
-            result_aggregator.aggregate, prompt, plan, results
+            result_aggregator.aggregate,
+            task_spec,
+            plan,
+            evidence_validation,
+        )
+        aggregation = await run_in_threadpool(
+            result_policy_checker.check,
+            aggregation,
         )
         completed = ExecutionEvent(
             type="task_completed",
@@ -637,8 +696,44 @@ async def route_request(request: RouteRequest) -> RouteDecision:
 
 @app.post("/api/plan", response_model=ExecutionPlan)
 async def plan_request(request: RouteRequest) -> ExecutionPlan:
+    policy = policy_gate.evaluate(request.prompt)
+    if not policy.allowed:
+        raise HTTPException(status_code=422, detail=policy.safe_response)
+    task_spec = task_interpreter.interpret(request.prompt, policy)
+    personal_context, action = _prepare_personal_context(task_spec)
+    if action is not None:
+        action_name, requirements = action
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "action_required": action_name,
+                "profile_requirements": requirements.model_dump(mode="json"),
+            },
+        )
+    if personal_context is not None:
+        task_spec = task_spec.model_copy(
+            update={
+                "missing_fields": [],
+                "execution_decision": "execute_with_defaults",
+                "clarification_question": None,
+            }
+        )
     try:
-        return await run_in_threadpool(manager.create_plan, request.prompt)
+        plan = await run_in_threadpool(
+            manager.create_plan,
+            task_spec,
+            request.prompt,
+            (
+                personal_context.minimal_summary()
+                if personal_context is not None
+                else None
+            ),
+        )
+        return (
+            _attach_personal_context(plan, personal_context)
+            if personal_context is not None
+            else plan
+        )
     except ManagerAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -691,27 +786,16 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
             )
 
         task_spec = task_interpreter.interpret(request.prompt, policy)
-        profile: UserInvestmentProfile | None = None
-        profile_summary: dict[str, Any] | None = None
-        if task_spec.task_type == "personal_investment_decision":
-            profile = _profile_service().get()
-            if profile is None or not profile.onboarding_completed:
-                return _profile_action_task_response(
-                    task_spec,
-                    action="profile_onboarding_required",
-                    missing_fields=list(PERSONAL_DECISION_REQUIRED_FIELDS),
-                    started_at=started_at,
-                )
-            missing_profile_fields = profile.missing_fields(
-                PERSONAL_DECISION_REQUIRED_FIELDS
+        personal_context, action = _prepare_personal_context(task_spec)
+        if action is not None:
+            action_name, requirements = action
+            return _profile_action_task_response(
+                task_spec,
+                action=action_name,
+                requirements=requirements,
+                started_at=started_at,
             )
-            if missing_profile_fields:
-                return _profile_action_task_response(
-                    task_spec,
-                    action="profile_update_required",
-                    missing_fields=missing_profile_fields,
-                    started_at=started_at,
-                )
+        if personal_context is not None:
             task_spec = task_spec.model_copy(
                 update={
                     "missing_fields": [],
@@ -719,7 +803,6 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
                     "clarification_question": None,
                 }
             )
-            profile_summary = profile.risk_summary()
         if task_spec.execution_decision == "clarify":
             aggregation = result_policy_checker.check(
                 result_aggregator.build_clarification_response(task_spec)
@@ -753,7 +836,7 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
                 disclaimer=RESEARCH_DISCLAIMER,
             )
 
-        if profile_summary is None:
+        if personal_context is None:
             plan = await run_in_threadpool(
                 manager.create_plan,
                 task_spec,
@@ -764,9 +847,9 @@ async def execute_task(request: RouteRequest) -> TaskExecutionResponse:
                 manager.create_plan,
                 task_spec,
                 request.prompt,
-                profile_summary,
+                personal_context.minimal_summary(),
             )
-            plan = _attach_profile_to_risk(plan, profile_summary)
+            plan = _attach_personal_context(plan, personal_context)
         status = "needs_clarification" if plan.needs_clarification else "running"
         store.create_task(
             task_id=task_id,
@@ -950,18 +1033,35 @@ def _profile_action_task_response(
         "profile_onboarding_required",
         "profile_update_required",
     ],
-    missing_fields: list[str],
+    requirements: ProfileFieldRequirements,
     started_at: float,
 ) -> JSONResponse:
+    missing_fields = requirements.missing
     onboarding = action == "profile_onboarding_required"
+    required_text = "、".join(
+        requirements.labels.get(field, field) for field in requirements.required
+    ) or "无"
+    available_text = "、".join(
+        requirements.labels.get(field, field) for field in requirements.available
+    ) or "无"
+    missing_text = "、".join(
+        requirements.labels.get(field, field) for field in missing_fields
+    ) or "无"
+    reason_text = "；".join(
+        f"{requirements.labels.get(field, field)}："
+        f"{requirements.reasons.get(field, '本次决策需要该事实。')}"
+        for field in missing_fields
+    )
     explanation = (
-        "这是个人投资决策。请先进入“用户画像”完成一次建档；"
-        "建档会确认投资期限、应急资金、收入支出和最大亏损边界。"
+        "这是个人投资决策。请先进入“用户画像”提供本次任务所需字段；"
         "画像完成前不会创建专家任务图，也不会给出买卖或具体仓位建议。"
         if onboarding
-        else "当前个人投资任务仍缺少必要画像字段："
-        + "、".join(missing_fields)
-        + "。请在“用户画像”页面补充这些字段，不会重新启动整套问卷。"
+        else "当前个人投资任务只缺少本次决策直接需要的画像字段。"
+    )
+    explanation += (
+        f" 本次需要：{required_text}；已具备：{available_text}；"
+        f"仍缺少：{missing_text}。{reason_text}"
+        " 请在“用户画像”页面补充，不会重新启动整套问卷。"
     )
     clarification = task_spec.model_copy(
         update={
@@ -984,7 +1084,24 @@ def _profile_action_task_response(
                     ),
                     "explanation": explanation,
                 }
-            )
+            ),
+            "content_blocks": [
+                block.model_copy(
+                    update={
+                        "data": {
+                            **block.data,
+                            "profile_requirements": requirements.model_dump(
+                                mode="json"
+                            ),
+                        }
+                    }
+                )
+                for block in aggregation.content_blocks
+            ],
+            "metadata": {
+                **aggregation.metadata,
+                "profile_requirements": requirements.model_dump(mode="json"),
+            },
         }
     )
     duration_ms = max(0, round((perf_counter() - started_at) * 1000))
@@ -995,6 +1112,9 @@ def _profile_action_task_response(
             metadata={
                 "action_required": action,
                 "missing_fields": missing_fields,
+                "required_fields": requirements.required,
+                "available_fields": requirements.available,
+                "reasons": requirements.reasons,
             },
         ),
         ExecutionEvent(
@@ -1017,6 +1137,7 @@ def _profile_action_task_response(
             **response.model_dump(mode="json"),
             "action_required": action,
             "required_profile_fields": missing_fields,
+            "profile_requirements": requirements.model_dump(mode="json"),
         }
     )
 
@@ -1028,8 +1149,9 @@ def _create_profile_action_session(
         "profile_onboarding_required",
         "profile_update_required",
     ],
-    missing_fields: list[str],
+    requirements: ProfileFieldRequirements,
 ) -> SessionResponse:
+    missing_fields = requirements.missing
     message = (
         "请先完成首次用户画像建档。"
         if action == "profile_onboarding_required"
@@ -1048,6 +1170,9 @@ def _create_profile_action_session(
         metadata={
             "action_required": action,
             "missing_fields": missing_fields,
+            "required_fields": requirements.required,
+            "available_fields": requirements.available,
+            "reasons": requirements.reasons,
         },
     )
     return SessionResponse(
@@ -1055,6 +1180,60 @@ def _create_profile_action_session(
         plan=None,
         action_required=action,
         required_profile_fields=missing_fields,
+        profile_requirements=requirements.model_dump(mode="json"),
+    )
+
+
+def _prepare_personal_context(
+    task_spec: TaskSpec,
+) -> tuple[
+    PersonalDecisionContext | None,
+    tuple[
+        Literal["profile_onboarding_required", "profile_update_required"],
+        ProfileFieldRequirements,
+    ]
+    | None,
+]:
+    """Build task-scoped requirements and constraints from canonical SQLite data."""
+
+    if task_spec.task_type != "personal_investment_decision":
+        return None, None
+    profile = _profile_service().get()
+    context = personal_context_builder.build(task_spec, profile)
+    assert context is not None
+    if profile is None or not profile.onboarding_completed:
+        return context, ("profile_onboarding_required", context.requirements)
+    if context.requirements.missing:
+        return context, ("profile_update_required", context.requirements)
+    return context, None
+
+
+def _attach_personal_context(
+    plan: ExecutionPlan,
+    context: PersonalDecisionContext,
+) -> ExecutionPlan:
+    """Attach value-minimized constraints to Risk and formal plan context."""
+
+    summary = context.minimal_summary()
+    steps = [
+        step.model_copy(
+            update={
+                "inputs": {
+                    **step.inputs,
+                    "risk_mode": "personal_capacity",
+                    "risk_context": summary,
+                }
+            }
+        )
+        if step.agent == AgentId.RISK
+        else step
+        for step in plan.steps
+    ]
+    return plan.model_copy(
+        update={
+            "steps": steps,
+            "personal_context": context,
+        }
     )
 
 
@@ -1062,13 +1241,14 @@ def _attach_profile_to_risk(
     plan: ExecutionPlan,
     summary: dict[str, Any],
 ) -> ExecutionPlan:
-    """Attach the minimal canonical summary only to selected Risk steps."""
+    """Backward-compatible value-minimized Risk attachment helper."""
 
     steps = [
         step.model_copy(
             update={
                 "inputs": {
                     **step.inputs,
+                    "risk_mode": "personal_capacity",
                     "risk_context": summary,
                 }
             }
@@ -1078,6 +1258,28 @@ def _attach_profile_to_risk(
         for step in plan.steps
     ]
     return plan.model_copy(update={"steps": steps})
+
+
+def _fold_clarification_answers(
+    user_request: str,
+    answers: dict[str, Any],
+) -> str:
+    """Create the text rechecked by PolicyGate and TaskInterpreter."""
+
+    pairs: list[str] = []
+    for key, value in answers.items():
+        if value in (None, "", []):
+            continue
+        rendered = (
+            "、".join(str(item) for item in value if item != "")
+            if isinstance(value, (list, tuple))
+            else str(value)
+        )
+        if rendered:
+            pairs.append(f"{key}={rendered}")
+    if not pairs:
+        return user_request.strip()
+    return f"{user_request.strip()}\n\n用户澄清：" + "；".join(pairs) + "。"
 
 
 def _event_to_dict(event: ExecutionEvent) -> dict[str, Any]:

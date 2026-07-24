@@ -28,22 +28,26 @@ class RiskAgent:
         if not dependency_evidence and not independent_context and not task.objective:
             return _failed(task, "Risk Agent 缺少可审查的策略、观点或上游证据。")
 
-        assessment = _assess(task, dependency_evidence, independent_context)
-        summary = (
-            f"风险等级为 {assessment['risk_level']}；"
-            f"识别出 {len(assessment['risk_factors'])} 个主要风险因素。"
+        risk_mode = _resolve_risk_mode(task)
+        assessment = _assess(
+            task,
+            dependency_evidence,
+            independent_context,
+            risk_mode,
         )
+        summary = _fallback_summary(assessment, risk_mode)
         limitations = list(assessment["missing_evidence"])
-        try:
-            explanation = self._get_ark_client().chat(
-                _risk_prompt(task, dependency_evidence, assessment)
-            ).strip()
-            if explanation:
-                summary = explanation
-        except (ArkClientError, Exception):
-            limitations.append(
-                "Ark 风险解释服务不可用；风险清单由结构化证据规则降级生成。"
-            )
+        if risk_mode != "personal_capacity":
+            try:
+                explanation = self._get_ark_client().chat(
+                    _risk_prompt(task, dependency_evidence, assessment, risk_mode)
+                ).strip()
+                if explanation:
+                    summary = explanation
+            except (ArkClientError, Exception):
+                limitations.append(
+                    "Ark 风险解释服务不可用；风险清单由结构化证据规则降级生成。"
+                )
 
         return ExpertResult(
             task_id=task.task_id,
@@ -58,6 +62,7 @@ class RiskAgent:
             data_sources=_dependency_sources(task.dependency_results),
             metadata={
                 **assessment,
+                "risk_mode": risk_mode,
                 "mode": "dependency" if task.dependency_results else "independent",
                 "fact_judgment_boundary": {
                     "facts": dependency_evidence,
@@ -115,20 +120,42 @@ def _assess(
     task: ExpertTask,
     evidence: list[dict[str, Any]],
     context: dict[str, Any],
+    risk_mode: str | None,
 ) -> dict[str, Any]:
+    if risk_mode == "personal_capacity":
+        return _assess_personal_capacity(context)
+    if risk_mode not in {"strategy_risk", "market_risk"}:
+        return {
+            "risk_level": "unable_to_grade",
+            "risk_factors": [],
+            "challenged_assumptions": [],
+            "missing_evidence": ["风险模式或可审查证据不足，无法可靠分级。"],
+            "failure_scenarios": [],
+            "recommended_follow_up": ["请明确需要审查个人承受能力、策略风险或市场风险。"],
+            "reviewed_context": {},
+        }
+
     risk_factors: list[str] = []
-    challenged = [
-        "历史样本中的关系能够延续到未来市场环境。",
-        "当前策略描述足以覆盖交易成本、容量和执行约束。",
-    ]
-    missing = [
-        "缺少样本外验证和不同市场状态下的稳健性证据。",
-        "缺少交易成本、滑点、容量与流动性约束数据。",
-    ]
-    failure_scenarios = [
-        "市场状态切换导致历史信号失效。",
-        "换手和冲击成本吞噬名义收益。",
-    ]
+    if risk_mode == "strategy_risk":
+        challenged = [
+            "历史样本中的关系能够延续到未来市场环境。",
+            "当前策略描述足以覆盖交易成本、容量和执行约束。",
+        ]
+        missing = [
+            "缺少样本外验证和不同市场状态下的稳健性证据。",
+            "缺少交易成本、滑点、容量与流动性约束数据。",
+        ]
+        failure_scenarios = [
+            "市场状态切换导致历史信号失效。",
+            "换手和冲击成本吞噬名义收益。",
+        ]
+    else:
+        challenged = ["历史市场状态能够代表未来可能出现的风险环境。"]
+        missing = ["缺少极端行情、流动性收缩和宏观冲击情景证据。"]
+        failure_scenarios = [
+            "市场状态切换使历史波动和相关性失去代表性。",
+            "极端行情下流动性下降并放大价格波动。",
+        ]
 
     max_drawdowns: list[float] = []
     volatilities: list[float] = []
@@ -176,14 +203,14 @@ def _assess(
         risk_factors.append(
             f"上游因子计算的最低非空覆盖率为 {min(factor_coverages):.2%}。"
         )
-    if unverified_factors:
+    if unverified_factors and risk_mode == "strategy_risk":
         risk_factors.append(
             "上游结果明确标记为尚未验证有效性："
             + "、".join(dict.fromkeys(unverified_factors))
             + "。"
         )
         missing.append("缺少因子 IC、样本外和回测有效性证据。")
-    if not evidence:
+    if not evidence and risk_mode == "strategy_risk":
         risk_factors.extend(
             [
                 "策略可能对参数、样本区间和市场状态高度敏感。",
@@ -192,8 +219,17 @@ def _assess(
             ]
         )
         missing.insert(0, "当前为独立审查，未提供可引用的市场数据证据。")
+    elif not evidence:
+        risk_factors.extend(
+            [
+                "历史波动可能低估极端行情下的实际风险。",
+                "市场流动性下降可能放大价格冲击和退出难度。",
+                "宏观环境变化可能使历史市场状态失去代表性。",
+            ]
+        )
+        missing.insert(0, "当前未提供可引用的市场数据或情景证据。")
 
-    level = "medium"
+    level = "unable_to_grade" if not risk_factors else "medium"
     if (max_drawdowns and min(max_drawdowns) <= -0.2) or (
         observation_counts and min(observation_counts) < 30
     ):
@@ -207,26 +243,122 @@ def _assess(
         "challenged_assumptions": challenged,
         "missing_evidence": missing,
         "failure_scenarios": failure_scenarios,
-        "recommended_follow_up": [
-            "补充样本外、滚动窗口和市场状态分层检验。",
-            "将手续费、滑点、冲击成本和容量约束纳入验证。",
-        ],
+        "recommended_follow_up": (
+            [
+                "补充样本外、滚动窗口和市场状态分层检验。",
+                "将手续费、滑点、冲击成本和容量约束纳入验证。",
+            ]
+            if risk_mode == "strategy_risk"
+            else [
+                "补充极端行情、流动性收缩和宏观冲击情景。",
+                "核对数据覆盖范围及其对波动判断的限制。",
+            ]
+        ),
         "reviewed_context": context,
     }
+
+
+def _assess_personal_capacity(context: dict[str, Any]) -> dict[str, Any]:
+    summary = context.get("risk_context")
+    if not isinstance(summary, dict):
+        summary = {}
+    constraints = summary.get("constraints")
+    if not isinstance(constraints, list):
+        constraints = []
+    risk_factors = [
+        str(item.get("statement"))
+        for item in constraints
+        if isinstance(item, dict) and item.get("statement")
+    ]
+    status = summary.get("status")
+    capacity = summary.get("capacity_level")
+    missing = [
+        "个人约束评估缺少本次任务的关键画像字段。"
+    ] if status == "insufficient_information" else []
+    return {
+        "risk_level": (
+            "unable_to_grade"
+            if capacity == "unable_to_grade"
+            else "high"
+            if capacity == "low"
+            else "medium"
+            if capacity == "medium"
+            else "low"
+            if capacity == "high"
+            else "unable_to_grade"
+        ),
+        "capacity_level": capacity or "unable_to_grade",
+        "risk_factors": risk_factors,
+        "challenged_assumptions": [
+            "个人约束只能限制结论边界，不能证明任何产品适合用户。"
+        ],
+        "missing_evidence": missing,
+        "failure_scenarios": [],
+        "recommended_follow_up": (
+            ["补充本次任务仍缺失的关键画像字段。"]
+            if missing
+            else ["将个人约束与实际产品风险证据分开核对。"]
+        ),
+        "reviewed_context": {
+            "constraint_codes": [
+                item.get("code")
+                for item in constraints
+                if isinstance(item, dict) and item.get("code")
+            ],
+            "fields_used": summary.get("fields_used", []),
+            "missing_critical_fields": summary.get(
+                "missing_critical_fields", []
+            ),
+        },
+    }
+
+
+def _resolve_risk_mode(task: ExpertTask) -> str | None:
+    explicit = task.inputs.get("risk_mode")
+    if explicit in {"personal_capacity", "strategy_risk", "market_risk"}:
+        return str(explicit)
+    context = task.inputs.get("risk_context")
+    if isinstance(context, dict) and (
+        "capacity_level" in context or "constraints" in context
+    ):
+        return "personal_capacity"
+    if task.inputs.get("strategy") or task.inputs.get("thesis"):
+        return "strategy_risk"
+    upstream_agents = {result.agent for result in task.dependency_results.values()}
+    if AgentId.QUANT in upstream_agents:
+        return "strategy_risk"
+    if upstream_agents & {AgentId.RESEARCH, AgentId.MACRO}:
+        return "market_risk"
+    return None
+
+
+def _fallback_summary(
+    assessment: dict[str, Any],
+    risk_mode: str | None,
+) -> str:
+    level = assessment["risk_level"]
+    count = len(assessment["risk_factors"])
+    if level == "unable_to_grade":
+        return "现有信息不足，无法对本次风险进行可靠分级。"
+    if risk_mode == "personal_capacity":
+        return f"个人约束评估识别出 {count} 项需要纳入结论边界的约束。"
+    return f"风险等级为 {level}；识别出 {count} 个主要风险因素。"
 
 
 def _risk_prompt(
     task: ExpertTask,
     evidence: list[dict[str, Any]],
     assessment: dict[str, Any],
+    risk_mode: str | None,
 ) -> str:
     payload = {
         "objective": task.objective,
+        "risk_mode": risk_mode,
         "cited_dependency_evidence": evidence,
         "deterministic_assessment": assessment,
     }
     return f"""
-你是 AlphaOS Risk Agent。请基于给定结构化事实解释风险，不得重复冒充 Research
+你是 AlphaOS Risk Agent。严格遵守 risk_mode 的分析边界，基于给定结构化事实解释风险，不得重复冒充 Research
 结论，不得补造事实。明确区分数据事实、风险判断与未知信息，并引用 source_step。
 不要给出买入卖出建议。用简洁中文返回风险摘要。
 

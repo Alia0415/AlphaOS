@@ -143,6 +143,29 @@ class Store:
             )
             self._conn.commit()
 
+    def update_task_request(
+        self,
+        task_id: str,
+        *,
+        prompt: str,
+        status: str,
+        plan: Any | None = None,
+    ) -> None:
+        """Atomically persist a re-governed clarification request and plan."""
+
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET prompt = ?, status = ?, plan_json = ? "
+                "WHERE id = ?",
+                (
+                    prompt,
+                    status,
+                    _dumps(plan) if plan is not None else None,
+                    task_id,
+                ),
+            )
+            self._conn.commit()
+
     def append_event(
         self,
         task_id: str,

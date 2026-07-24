@@ -56,6 +56,17 @@ def validate_execution_plan(
         if step.id in step.depends_on:
             raise PlanValidationError(f"Step {step.id} cannot depend on itself")
         _validate_step_contract(step, registry)
+        _validate_private_inputs(step)
+
+    if plan.task_type == "personal_investment_decision":
+        for step in plan.steps:
+            if step.agent == AgentId.RISK and (
+                step.inputs.get("risk_mode") != "personal_capacity"
+            ):
+                raise PlanValidationError(
+                    "Personal decision Risk steps require "
+                    "inputs.risk_mode=personal_capacity"
+                )
 
     if set(selected) != used_agents:
         raise PlanValidationError(
@@ -81,9 +92,56 @@ def _validate_step_contract(
 
     if step.agent == AgentId.RESEARCH:
         _validate_research_inputs(step)
+    elif step.agent == AgentId.RISK:
+        mode = step.inputs.get("risk_mode")
+        if mode is not None and mode not in {
+            "personal_capacity",
+            "strategy_risk",
+            "market_risk",
+        }:
+            raise PlanValidationError(
+                f"Risk step {step.id} has unsupported risk_mode: {mode}"
+            )
     elif step.agent == AgentId.REPORT and not step.depends_on:
         raise PlanValidationError(
             f"Report step {step.id} requires at least one declared dependency"
+        )
+
+
+_PRIVATE_PROFILE_KEYS = {
+    "profile",
+    "user_profile",
+    "personal_context",
+    "monthly_after_tax_income_cny",
+    "income_stability",
+    "monthly_essential_expenses_cny",
+    "monthly_debt_payment_cny",
+    "dependents_count",
+    "emergency_fund_cny",
+    "planned_large_expenses_cny",
+    "planned_large_expenses_within_months",
+    "available_investment_funds_cny",
+    "max_acceptable_loss_ratio",
+    "existing_positions",
+}
+
+
+def _validate_private_inputs(step: PlanStep) -> None:
+    if step.agent not in {AgentId.RESEARCH, AgentId.QUANT, AgentId.MACRO}:
+        return
+
+    def visit(value: Any) -> bool:
+        if isinstance(value, dict):
+            if _PRIVATE_PROFILE_KEYS & set(value):
+                return True
+            return any(visit(item) for item in value.values())
+        if isinstance(value, list):
+            return any(visit(item) for item in value)
+        return False
+
+    if visit(step.inputs):
+        raise PlanValidationError(
+            f"{step.agent.value} step {step.id} cannot receive private profile fields"
         )
 
 

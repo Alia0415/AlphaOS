@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from backend.core.personal_decision_context import PersonalDecisionContext
+
 
 RESEARCH_DISCLAIMER = (
     "本结果仅用于量化投资研究与技术演示，基于指定数据范围、方法和假设生成。"
@@ -111,6 +113,7 @@ class ExecutionPlan(BaseModel):
     needs_clarification: bool = False
     clarification_question: str | None = None
     clarification_options: list[ClarificationGroup] = Field(default_factory=list)
+    personal_context: PersonalDecisionContext | None = None
 
     @model_validator(mode="after")
     def clarification_is_actionable(self) -> "ExecutionPlan":
@@ -215,6 +218,7 @@ class ResultBlock(BaseModel):
         "report",
         "data_scope",
         "boundary_response",
+        "personal_constraints",
     ]
     title: str = Field(min_length=1)
     description: str | None = None

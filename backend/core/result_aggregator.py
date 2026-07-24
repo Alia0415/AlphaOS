@@ -91,6 +91,7 @@ BlockType = Literal[
     "report",
     "data_scope",
     "boundary_response",
+    "personal_constraints",
 ]
 Importance = Literal["primary", "secondary", "supporting"]
 
@@ -631,6 +632,33 @@ class ResultAggregator:
                 "primary",
             ),
         ]
+        if evidence.personal_constraints is not None:
+            privacy = (
+                plan.personal_context.privacy_boundary.model_dump(mode="json")
+                if plan.personal_context is not None
+                else {
+                    "shared_with_research": [],
+                    "shared_with_quant": [],
+                    "shared_with_macro": [],
+                    "raw_values_exposed_in_results": False,
+                }
+            )
+            blocks.append(
+                _block(
+                    "personal-constraints",
+                    "personal_constraints",
+                    "本次决策中的个人约束",
+                    [],
+                    {
+                        **evidence.personal_constraints.model_dump(mode="json"),
+                        "evidence_origin": (
+                            "core.personal_constraint_evaluator"
+                        ),
+                        "privacy_boundary": privacy,
+                    },
+                    "primary",
+                )
+            )
         evidence_blocks: list[ResultBlock] = []
         if task_spec.task_type == "formal_report" and profile.reports:
             step_id, report = profile.reports[-1]
@@ -1333,6 +1361,25 @@ def _task_direct_answer(
             if profile.risks
             else "当前缺少足以支持完整风险判断的证据。"
         )
+    elif task_spec.task_type == "personal_investment_decision":
+        personal = evidence.personal_constraints
+        if personal is None or personal.status != "evaluated":
+            headline = "个人约束信息仍不足"
+            explanation = (
+                "系统无法可靠评估本次决策的现实承受边界，"
+                "因此不会给出适合性、买卖或仓位结论。"
+            )
+        else:
+            headline = "已将个人约束纳入本次研究结论"
+            high_count = sum(
+                item.severity == "high" for item in personal.constraints
+            )
+            explanation = (
+                f"确定性评估使用了 {len(personal.fields_used)} 个本任务相关字段，"
+                f"形成 {len(personal.constraints)} 项约束，"
+                f"其中 {high_count} 项为高严重度。"
+                "这些约束只限制结论边界，不代表任何产品适合用户。"
+            )
     elif task_spec.task_type == "formal_report":
         headline = "正式研究报告已生成"
         explanation = "报告仅整合实际完成的上游研究证据，并保留验证状态与限制。"

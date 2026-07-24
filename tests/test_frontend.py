@@ -39,6 +39,7 @@ def test_frontend_assets_are_served() -> None:
     assert "buildPlainLanguageResult" in script.text
     assert "BLOCK_RENDERERS" in script.text
     assert "renderContentBlocks" in script.text
+    assert "renderPersonalConstraints" in script.text
 
 
 def test_office_user_profile_module_is_served() -> None:
@@ -51,6 +52,8 @@ def test_office_user_profile_module_is_served() -> None:
     assert "openProfileOnboarding" in profile.text
     assert "SQLite" in profile.text
     assert office.status_code == 200
+    office_script = client.get("/static/office/js/app.js")
+    assert "renderPersonalConstraintData" in office_script.text
 
 
 def test_presentation_modules_are_served() -> None:

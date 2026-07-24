@@ -102,6 +102,8 @@ class ManagerAgent:
         task_spec: TaskSpec,
     ) -> ExecutionPlan:
         payload = _extract_json(raw_response)
+        if payload.get("personal_context") is not None:
+            raise ValueError("Manager cannot create or modify personal_context")
         plan = ExecutionPlan.model_validate(payload)
         if plan.task_type not in {None, task_spec.task_type}:
             raise ValueError("Manager cannot modify TaskSpec.task_type")
@@ -178,6 +180,10 @@ Research 和 Quant Agent 都会在各自授权 Skill 中另行动态规划；Man
 个人画像摘要只用于判断现实约束；不得生成“保守型、稳健型、激进型”等综合标签，
 不得仅凭投资经验推高风险承受能力。Research、Macro、Quant 不得接收收入、支出、
 债务或完整画像；应用层只会将最小脱敏摘要注入确有需要的 Risk step。
+个人约束已由应用层确定性评估，即使不选择 Risk 也会作为正式证据进入结果。
+若选择 Risk，必须在 inputs.risk_mode 中明确填写 personal_capacity、
+strategy_risk 或 market_risk；个人任务中的 Risk 必须使用 personal_capacity。
+Manager 不得创建、修改或输出 personal_context。
 
 始终选择完成任务所需的最小充分专家集合：
 - 不得因为某个专家已实现就选择它；
@@ -285,6 +291,9 @@ Agent 输入契约：
   或 full_dossier scope；
 - 行业 Research 必须使用非空 industry；time_range、research_goal、focus 如提供
   必须为非空字符串；不得同时提供 symbol、symbols 或财报 scope；
+- Risk 如被选择必须使用 risk_mode=personal_capacity、strategy_risk 或
+  market_risk；个人投资任务只能使用 personal_capacity；
+- Research、Quant、Macro inputs 不得包含用户画像、收入、债务、家庭成员或持仓；
 - Report 必须声明至少一个上游 depends_on；
 - 不要为了修复契约而增加不需要的专家或改成固定流程。
 """.strip()

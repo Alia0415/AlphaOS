@@ -8,7 +8,7 @@ from typing import Any
 from backend.core.store import Store
 from backend.core.user_profile import (
     LOCAL_USER_ID,
-    PERSONAL_DECISION_REQUIRED_FIELDS,
+    PROFILE_FACT_FIELDS,
     UserInvestmentProfile,
     UserProfilePatch,
     UserProfilePut,
@@ -73,18 +73,16 @@ class UserProfileService:
                 "profile_exists": False,
                 "onboarding_completed": False,
                 "action_required": "profile_onboarding_required",
-                "missing_fields": list(PERSONAL_DECISION_REQUIRED_FIELDS),
+                "missing_fields": list(PROFILE_FACT_FIELDS),
                 "profile_version": None,
                 "profile_completeness": 0.0,
             }
-        missing = profile.missing_fields(PERSONAL_DECISION_REQUIRED_FIELDS)
+        missing = profile.missing_fields(PROFILE_FACT_FIELDS)
         return {
             "profile_exists": True,
             "onboarding_completed": profile.onboarding_completed,
             "action_required": (
                 None
-                if profile.onboarding_completed and not missing
-                else "profile_update_required"
                 if profile.onboarding_completed
                 else "profile_onboarding_required"
             ),

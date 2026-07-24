@@ -689,6 +689,7 @@ const BLOCK_RENDERERS = {
   metric_cards: renderMetricCards,
   comparison: renderComparison,
   risk_list: renderListBlock,
+  personal_constraints: renderPersonalConstraints,
   factor_list: renderFactorList,
   action_list: renderListBlock,
   limitations: renderListBlock,
@@ -735,6 +736,37 @@ function renderFindingCards(card, data) {
     if (entry.textContent) list.append(entry);
   });
   card.append(list);
+}
+
+function renderPersonalConstraints(card, data) {
+  const summary = document.createElement("div");
+  summary.className = "plain-summary-grid";
+  [
+    ["评估状态", data.status || "—"],
+    ["承受能力边界", data.capacity_level || "unable_to_grade"],
+    ["使用字段", (data.fields_used || []).join("、") || "无"],
+    ["缺失关键字段", (data.missing_critical_fields || []).join("、") || "无"],
+  ].forEach(([label, value]) => {
+    const item = document.createElement("div");
+    const term = document.createElement("span");
+    const content = document.createElement("strong");
+    term.textContent = label;
+    content.textContent = value;
+    item.append(term, content);
+    summary.append(item);
+  });
+  card.append(summary);
+  renderListBlock(card, {
+    items: (data.constraints || []).map((item) => ({
+      text: `${item.statement} ${item.basis}`,
+      title: `${item.category} · ${item.severity}`,
+      source_fields: item.source_fields || [],
+    })),
+  });
+  const privacy = document.createElement("p");
+  privacy.className = "aggregation-description";
+  privacy.textContent = "原始敏感数值未进入结果；Research、Quant、Macro 未接收个人画像字段。";
+  card.append(privacy);
 }
 
 function renderMetricCards(card, data) {
@@ -888,6 +920,7 @@ function blockTypeLabel(type) {
     metric_cards: "指标",
     comparison: "对比",
     risk_list: "风险",
+    personal_constraints: "个人约束",
     factor_list: "研究想法",
     action_list: "验证事项",
     limitations: "限制",
