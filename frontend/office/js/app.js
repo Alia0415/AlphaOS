@@ -1096,14 +1096,445 @@ function renderClarifySummary(panel) {
 }
 
 // ---------------------------------------------------------------------------
-// page: war room (界面 03) — full sprite-driven build lands in the next step
+// page: war room (界面 03) — autonomous sprite office + script-driven execution
 // ---------------------------------------------------------------------------
+const WAR_W = 760, WAR_H = 340;
+const WALK_CYCLE = [4, 5, 6, 5]; // side-view walk frames present in every sheet
+const WAR_HOMES = {
+  manager: { x: 380, y: 130 },
+  macro: { x: 150, y: 190 },
+  research: { x: 390, y: 205 },
+  quant: { x: 610, y: 190 },
+  risk: { x: 240, y: 300 },
+  report: { x: 560, y: 300 },
+};
+const DAG_POS = {
+  manager: [50, 12], macro: [20, 40], research: [50, 40],
+  quant: [80, 40], risk: [34, 73], report: [67, 73],
+};
+const DAG_EDGES = [
+  ["manager", "macro"], ["manager", "research"], ["manager", "quant"],
+  ["macro", "risk"], ["research", "risk"], ["quant", "risk"], ["risk", "report"],
+];
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
 function pageWarRoom() {
-  const wrap = el("div", "panel");
-  wrap.appendChild(screenTitle("03", "多 Agent 作战室", "任务执行可视化中心。"));
-  const box = el("div", "empty-state");
-  box.innerHTML = '<div class="es-ico">🛰</div><p>作战室精灵动画引擎即将上线。</p>';
-  wrap.appendChild(box);
+  const wrap = el("div");
+
+  // ---- head ----
+  const head = el("div", "war-head");
+  head.appendChild(el("h1", "", "🛰 多 Agent 作战室"));
+  head.appendChild(el("span", "sub", "专家自主协作 · 任务执行实时可视化"));
+  const task = el("div", "war-task");
+  task.appendChild(el("span", "wt-name", esc(DEMO_TASK.title)));
+  const badge = el("span", "badge running", '<span class="dot"></span>执行中');
+  task.appendChild(badge);
+  head.appendChild(task);
+  wrap.appendChild(head);
+
+  const grid = el("div", "war-grid");
+
+  // ================= LEFT: task-graph DAG =================
+  const leftCol = el("div", "panel");
+  leftCol.appendChild(el("div", "panel-title", "任务执行流"));
+  const dag = el("div", "dag-wrap");
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("preserveAspectRatio", "none");
+  const edgeEls = {};
+  DAG_EDGES.forEach(([a, b]) => {
+    const [x1, y1] = DAG_POS[a], [x2, y2] = DAG_POS[b];
+    const line = document.createElementNS(svgNS, "line");
+    line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+    line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+    line.setAttribute("stroke", "#1d3a5c");
+    line.setAttribute("stroke-width", "0.5");
+    svg.appendChild(line);
+    edgeEls[`${a}-${b}`] = line;
+  });
+  dag.appendChild(svg);
+  const dagNodes = {};
+  Object.entries(DAG_POS).forEach(([id, [x, y]]) => {
+    const a = agentById(id);
+    const node = el("button", "dag-node st-idle");
+    node.style.left = `${x}%`;
+    node.style.top = `${y}%`;
+    node.appendChild(avatar(id, 34, "dn-ava"));
+    node.appendChild(el("strong", "", esc(a.name)));
+    node.appendChild(el("small", "", esc(a.role)));
+    node.appendChild(el("span", "badge off dn-badge", '<span class="dot"></span>待命'));
+    node.addEventListener("click", () => navigate("experts"));
+    dagNodes[id] = node;
+    dag.appendChild(node);
+  });
+  leftCol.appendChild(dag);
+  grid.appendChild(leftCol);
+
+  // ================= CENTER: live stage + progress + timeline =================
+  const centerCol = el("div");
+  const stagePanel = el("div", "panel");
+  stagePanel.appendChild(el("div", "panel-title", "作战室实时画面 <span class='title-extra'>专家在自主走动与协作</span>"));
+  const stage = el("div", "office-stage");
+  const canvas = el("canvas");
+  stage.appendChild(canvas);
+  const bubbleLayer = el("div", "bubble-layer");
+  stage.appendChild(bubbleLayer);
+  stagePanel.appendChild(stage);
+
+  // overall + per-agent progress
+  const prog = el("div", "progress-row");
+  const pmain = el("div");
+  pmain.innerHTML = '<div style="font-size:12px;color:var(--text-2);margin-bottom:6px">整体进度 <b class="p-pct" style="color:var(--cyan)">0%</b></div><div class="pbar"><i style="width:0%"></i></div>';
+  prog.appendChild(pmain);
+  const pstats = {
+    done: el("div", "pstat", '<strong>0</strong><span>已完成</span>'),
+    working: el("div", "pstat", '<strong>0</strong><span>进行中</span>'),
+    logs: el("div", "pstat", '<strong>0</strong><span>日志</span>'),
+    elapsed: el("div", "pstat", '<strong>0s</strong><span>用时</span>'),
+  };
+  prog.append(pstats.done, pstats.working, pstats.logs, pstats.elapsed);
+  stagePanel.appendChild(prog);
+  centerCol.appendChild(stagePanel);
+
+  // timeline
+  const tlPanel = el("div", "panel");
+  tlPanel.style.marginTop = "14px";
+  tlPanel.appendChild(el("div", "panel-title", "活动时间轴"));
+  const tl = el("div", "timeline");
+  const tlEvents = WAR_SCRIPT.filter((e) => e.type === "timeline");
+  const tlTrack = el("div", "tl-track");
+  const tlFill = el("div", "tl-fill");
+  tlFill.style.width = "0%";
+  tlTrack.appendChild(tlFill);
+  const tlNodeEls = [];
+  tlEvents.forEach((e) => {
+    const dot = el("button", "tl-node");
+    dot.style.left = `${(e.t / 60) * 100}%`;
+    tlTrack.appendChild(dot);
+    tlNodeEls.push(dot);
+  });
+  tl.appendChild(tlTrack);
+  const tlLabels = el("div", "tl-labels");
+  tlEvents.forEach((e) => {
+    tlLabels.appendChild(el("span", "tl-label", `${esc(e.label)}<span class="t">${esc(e.clock)}</span>`));
+  });
+  tl.appendChild(tlLabels);
+  const controls = el("div", "tl-controls");
+  const playBtn = el("button", "btn", "⏸ 暂停");
+  const speedSel = el("select");
+  [["1", "1x"], ["2", "2x"], ["4", "4x"]].forEach(([v, t]) => {
+    const o = el("option", "", t); o.value = v; speedSel.appendChild(o);
+  });
+  const replayBtn = el("button", "btn", "↻ 重播");
+  controls.append(el("span", "", '<span style="color:var(--text-2);font-size:12px">播放速度</span>'), speedSel, playBtn, replayBtn);
+  tl.appendChild(controls);
+  tlPanel.appendChild(tl);
+  centerCol.appendChild(tlPanel);
+  grid.appendChild(centerCol);
+
+  // ================= RIGHT: summary + skills + logs =================
+  const rightCol = el("div");
+  const sumPanel = el("div", "panel");
+  sumPanel.appendChild(el("div", "panel-title", "任务摘要"));
+  const kv = el("div", "kv-list");
+  [
+    ["研究对象", DEMO_TASK.short], ["任务类型", DEMO_TASK.type],
+    ["启动时间", DEMO_TASK.started], ["优先级", DEMO_TASK.priority],
+    ["预计完成", DEMO_TASK.eta],
+  ].forEach(([k, v]) => {
+    kv.appendChild(el("div", "kv", `<span class="k">${esc(k)}</span><span>${esc(v)}</span>`));
+  });
+  sumPanel.appendChild(kv);
+  rightCol.appendChild(sumPanel);
+
+  const skillPanel = el("div", "panel");
+  skillPanel.style.marginTop = "14px";
+  skillPanel.appendChild(el("div", "panel-title", "Skill 调用"));
+  const skillCounts = {};
+  const skillRows = {};
+  Object.keys(SKILL_FINAL_COUNTS).forEach((name) => {
+    skillCounts[name] = 0;
+    const row = el("div", "skill-row");
+    row.innerHTML = `<span>🧩</span><span>${esc(name)}</span><span class="sk-count">0</span>`;
+    skillRows[name] = row;
+    skillPanel.appendChild(row);
+  });
+  rightCol.appendChild(skillPanel);
+
+  const logPanel = el("div", "panel");
+  logPanel.style.marginTop = "14px";
+  logPanel.appendChild(el("div", "panel-title", "实时日志"));
+  const logEl = el("div", "log-list");
+  logPanel.appendChild(logEl);
+  rightCol.appendChild(logPanel);
+  grid.appendChild(rightCol);
+
+  wrap.appendChild(grid);
+
+  // ---------------- engine state ----------------
+  const agents = Object.keys(WAR_HOMES).map((id) => {
+    const home = WAR_HOMES[id];
+    const a = agentById(id);
+    loadSprite(SPRITE_MAP[id] || id);
+    return {
+      id, name: a ? a.name : id, sheet: SPRITE_MAP[id] || id,
+      x: home.x, y: home.y, tx: home.x, ty: home.y, home,
+      facing: 1, walking: false, pauseT: Math.random() * 1.5,
+      frameT: 0, frameIdx: 0, status: "idle", say: null, bubbleEl: null,
+    };
+  });
+  const agentById2 = (id) => agents.find((a) => a.id === id);
+
+  const state = { clock: 0, speed: 1, playing: true, ptr: 0, logs: 0, lastPct: -1 };
+
+  function pickWander(ag) {
+    ag.tx = clamp(ag.home.x + (Math.random() * 2 - 1) * 95, 55, WAR_W - 55);
+    ag.ty = clamp(ag.home.y + (Math.random() * 2 - 1) * 42, 115, WAR_H - 22);
+    ag.pauseT = 0.6 + Math.random() * 1.9;
+  }
+  function gather(ids) {
+    const cx = 380, cy = 225, n = ids.length;
+    ids.forEach((id, i) => {
+      const ag = agentById2(id);
+      if (!ag) return;
+      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(n, 1);
+      ag.tx = clamp(cx + Math.cos(ang) * 78, 55, WAR_W - 55);
+      ag.ty = clamp(cy + Math.sin(ang) * 46, 115, WAR_H - 22);
+      ag.pauseT = 3;
+    });
+  }
+
+  function appendLog(who, text, color, clockStr) {
+    const line = el("div", "log-line");
+    line.innerHTML = `<span class="lt">${esc(clockStr)}</span><span class="la" style="color:${color || "var(--text-2)"}">${esc(who)}</span><span>${esc(text)}</span>`;
+    logEl.appendChild(line);
+    while (logEl.children.length > 40) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+    state.logs++;
+  }
+
+  const DAG_LABEL = { idle: "待命", working: "工作中", running: "运行中", done: "完成" };
+  function setDag(id, status) {
+    const node = dagNodes[id];
+    if (!node) return;
+    node.className = `dag-node st-${status}`;
+    const b = node.querySelector(".dn-badge");
+    if (b) {
+      const cls = status === "done" ? "done" : status === "idle" ? "off" : status;
+      b.className = `badge ${cls} dn-badge`;
+      b.innerHTML = `<span class="dot"></span>${DAG_LABEL[status] || status}`;
+    }
+    Object.entries(edgeEls).forEach(([key, ln]) => {
+      if (key.startsWith(`${id}-`) && (status === "working" || status === "running" || status === "done")) {
+        ln.setAttribute("stroke", "#22d3ee");
+        ln.setAttribute("stroke-width", "0.8");
+      }
+    });
+  }
+
+  function say(id, text, dur) {
+    const ag = agentById2(id);
+    if (!ag) return;
+    ag.say = { text, until: state.clock + (dur || 3) };
+  }
+
+  function clockStr() {
+    // map 0..60s script to the demo 10:15 → 10:28 window for log timestamps
+    const base = 10 * 60 + 15;
+    const mins = base + Math.round((state.clock / 60) * 13);
+    return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+  }
+
+  function dispatch(ev) {
+    const cs = ev.clock || clockStr();
+    switch (ev.type) {
+      case "log": appendLog(ev.agent, ev.text, ev.color, cs); break;
+      case "work": setDag(ev.agent, "working"); { const a = agentById2(ev.agent); if (a) a.status = "working"; } break;
+      case "dag": setDag(ev.agent, ev.status); break;
+      case "say": say(ev.agent, ev.text, ev.dur); break;
+      case "done": setDag(ev.agent, "done"); { const a = agentById2(ev.agent); if (a) a.status = "done"; } break;
+      case "skill":
+        skillCounts[ev.name] = ev.n;
+        if (skillRows[ev.name]) {
+          skillRows[ev.name].querySelector(".sk-count").textContent = ev.n;
+          skillRows[ev.name].classList.add("hl");
+          setTimeout(() => skillRows[ev.name] && skillRows[ev.name].classList.remove("hl"), 900);
+        }
+        break;
+      case "visit":
+        gather([ev.from, ev.to]);
+        (ev.lines || []).forEach((l, i) => say(l.agent, l.text, 3 + i));
+        break;
+      case "roundtable":
+        gather(ev.agents || []);
+        (ev.lines || []).forEach((l, i) => say(l.agent, l.text, 3 + i));
+        break;
+      case "timeline": break; // handled by clock-driven node states
+      case "finish":
+        agents.forEach((a) => { a.status = "done"; setDag(a.id, "done"); });
+        badge.className = "badge done";
+        badge.innerHTML = '<span class="dot"></span>已完成';
+        appendLog("系统", "AlphaOS 任务处理完成", "#7fa3c7", cs);
+        break;
+    }
+  }
+
+  function stepAgent(ag, dt) {
+    const dx = ag.tx - ag.x, dy = ag.ty - ag.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 3) {
+      ag.walking = false;
+      ag.pauseT -= dt;
+      if (ag.pauseT <= 0) pickWander(ag);
+    } else {
+      ag.walking = true;
+      const sp = 52 * dt;
+      ag.x += (dx / dist) * sp;
+      ag.y += (dy / dist) * sp;
+      ag.facing = dx < 0 ? -1 : 1;
+      ag.frameT += dt;
+      if (ag.frameT > 0.13) { ag.frameT = 0; ag.frameIdx++; }
+    }
+  }
+
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = WAR_W * dpr;
+  canvas.height = WAR_H * dpr;
+  const ctx = canvas.getContext("2d");
+
+  function drawRoom() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    const g = ctx.createLinearGradient(0, 0, 0, WAR_H);
+    g.addColorStop(0, "#0c1830"); g.addColorStop(1, "#0a1322");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, WAR_W, WAR_H);
+    ctx.strokeStyle = "#12233c"; ctx.lineWidth = 1;
+    for (let x = 0; x <= WAR_W; x += 48) { ctx.beginPath(); ctx.moveTo(x, 60); ctx.lineTo(x, WAR_H); ctx.stroke(); }
+    for (let y = 60; y <= WAR_H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WAR_W, y); ctx.stroke(); }
+    ctx.fillStyle = "#0e1e34"; ctx.fillRect(0, 0, WAR_W, 60);
+    ctx.strokeStyle = "#16304f"; ctx.beginPath(); ctx.moveTo(0, 60); ctx.lineTo(WAR_W, 60); ctx.stroke();
+    // desks at each home
+    Object.values(WAR_HOMES).forEach((h) => {
+      ctx.fillStyle = "#14304f";
+      ctx.beginPath(); ctx.roundRect(h.x - 30, h.y + 14, 60, 16, 5); ctx.fill();
+    });
+  }
+
+  function drawAgent(ag) {
+    const entry = spriteCache.get(ag.sheet);
+    const size = 66;
+    const fx = (ag.walking ? WALK_CYCLE[ag.frameIdx % WALK_CYCLE.length] : 0) * FRAME;
+    ctx.fillStyle = "rgba(0,0,0,0.28)";
+    ctx.beginPath(); ctx.ellipse(ag.x, ag.y + 4, 18, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.translate(ag.x, ag.y);
+    if (ag.facing < 0) ctx.scale(-1, 1);
+    if (entry && entry.ready) ctx.drawImage(entry.img, fx, 0, FRAME, FRAME, -size / 2, -size + 8, size, size);
+    else { ctx.fillStyle = "#13263f"; ctx.fillRect(-size / 2, -size + 8, size, size); }
+    ctx.restore();
+    // status dot
+    const dot = { working: "#60a5fa", running: "#60a5fa", done: "#34d399", idle: "#5a6b80" }[ag.status] || "#5a6b80";
+    ctx.fillStyle = dot;
+    ctx.beginPath(); ctx.arc(ag.x + 18, ag.y - size + 20, 3.5, 0, Math.PI * 2); ctx.fill();
+    // name tag
+    ctx.fillStyle = "rgba(10,22,40,0.82)";
+    ctx.beginPath(); ctx.roundRect(ag.x - 28, ag.y + 8, 56, 14, 4); ctx.fill();
+    ctx.fillStyle = "#9fc0e0";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(ag.name, ag.x, ag.y + 18);
+  }
+
+  function render() {
+    drawRoom();
+    [...agents].sort((a, b) => a.y - b.y).forEach(drawAgent);
+  }
+
+  function updateBubbles() {
+    agents.forEach((ag) => {
+      const active = ag.say && state.clock < ag.say.until;
+      if (active) {
+        if (!ag.bubbleEl) {
+          ag.bubbleEl = el("div", "say-bubble");
+          bubbleLayer.appendChild(ag.bubbleEl);
+        }
+        ag.bubbleEl.innerHTML = `<span class="sb-name">${esc(ag.name)}</span>${esc(ag.say.text)}`;
+        ag.bubbleEl.style.left = `${(ag.x / WAR_W) * 100}%`;
+        ag.bubbleEl.style.top = `${((ag.y - 62) / WAR_H) * 100}%`;
+      } else if (ag.bubbleEl) {
+        ag.bubbleEl.remove();
+        ag.bubbleEl = null;
+      }
+    });
+  }
+
+  function updateHud() {
+    const pct = Math.min(100, Math.round((state.clock / 60) * 100));
+    if (pct !== state.lastPct) {
+      state.lastPct = pct;
+      pmain.querySelector(".p-pct").textContent = `${pct}%`;
+      pmain.querySelector(".pbar i").style.width = `${pct}%`;
+      pstats.done.querySelector("strong").textContent = agents.filter((a) => a.status === "done").length;
+      pstats.working.querySelector("strong").textContent = agents.filter((a) => a.status === "working" || a.status === "running").length;
+      pstats.logs.querySelector("strong").textContent = state.logs;
+      pstats.elapsed.querySelector("strong").textContent = `${Math.round(state.clock)}s`;
+    }
+    tlFill.style.width = `${(state.clock / 60) * 100}%`;
+    tlEvents.forEach((e, i) => {
+      const node = tlNodeEls[i];
+      const done = state.clock >= e.t;
+      node.className = `tl-node${done ? " done" : ""}${!done && state.clock >= e.t - 2 ? " now" : ""}`;
+    });
+  }
+
+  function resetRun() {
+    state.clock = 0; state.ptr = 0; state.logs = 0; state.lastPct = -1;
+    logEl.innerHTML = "";
+    Object.keys(skillCounts).forEach((n) => { skillCounts[n] = 0; skillRows[n].querySelector(".sk-count").textContent = "0"; });
+    agents.forEach((a) => { a.status = "idle"; a.say = null; if (a.bubbleEl) { a.bubbleEl.remove(); a.bubbleEl = null; } });
+    Object.keys(DAG_POS).forEach((id) => setDag(id, "idle"));
+    DAG_EDGES.forEach(([a, b]) => { const ln = edgeEls[`${a}-${b}`]; ln.setAttribute("stroke", "#1d3a5c"); ln.setAttribute("stroke-width", "0.5"); });
+    badge.className = "badge running";
+    badge.innerHTML = '<span class="dot"></span>执行中';
+    state.playing = true;
+    playBtn.textContent = "⏸ 暂停";
+  }
+
+  playBtn.addEventListener("click", () => {
+    state.playing = !state.playing;
+    playBtn.textContent = state.playing ? "⏸ 暂停" : "▶ 继续";
+  });
+  speedSel.addEventListener("change", () => { state.speed = Number(speedSel.value) || 1; });
+  replayBtn.addEventListener("click", resetRun);
+
+  // ---------------- rAF loop ----------------
+  let raf = 0;
+  let last = performance.now();
+  function tick(ts) {
+    const dtReal = Math.min(0.05, (ts - last) / 1000);
+    last = ts;
+    const dt = dtReal * state.speed;
+    if (state.playing && state.clock < 60) {
+      state.clock += dt;
+      while (state.ptr < WAR_SCRIPT.length && WAR_SCRIPT[state.ptr].t <= state.clock) {
+        dispatch(WAR_SCRIPT[state.ptr++]);
+      }
+      if (state.clock >= 60) { state.clock = 60; state.playing = false; playBtn.textContent = "▶ 继续"; }
+      updateHud();
+    }
+    // agents always wander (autonomous movement), a touch slower when paused
+    agents.forEach((a) => stepAgent(a, (state.playing ? dt : dtReal) * (state.playing ? 1 : 0.5)));
+    render();
+    updateBubbles();
+    raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+  registerTeardown(() => {
+    cancelAnimationFrame(raf);
+    agents.forEach((a) => { if (a.bubbleEl) a.bubbleEl.remove(); });
+  });
+
   return wrap;
 }
 
